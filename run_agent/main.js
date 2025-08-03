@@ -4,17 +4,6 @@ import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 import fs from "node:fs";
 
-// Helper function to map LangGraph message types to AG-UI roles
-function mapLangGraphRoleToAGUI(langGraphType) {
-  const roleMapping = {
-    human: "user",
-    ai: "assistant",
-    tool: "tool",
-    system: "system",
-  };
-  return roleMapping[langGraphType] || "user";
-}
-
 function mapStateMessagesToAGUI(stateMessages) {
     const result = [];
 
@@ -189,17 +178,12 @@ async function runAgent(content, thread_id) {
   console.log("🆔 Thread ID:", agent.threadId);
   console.log("------ Your query:", content);
 
-
-
-
   agent.messages.push({
     id: randomUUID(),
     role: "user",
     content: content,
   });
 
-
-  console.log("messages",agent.messages.map(c=>c.content));
 
   const originalRunId = randomUUID(); // Create runId once and reuse it
 
@@ -240,6 +224,7 @@ async function runAgent(content, thread_id) {
             );
           },
           onTextMessageContentEvent({ event }) {
+            console.log(JSON.stringify(event, null, 2));
             process.stdout.write(event.delta);
           },
           onTextMessageEndEvent(event) {
@@ -367,14 +352,12 @@ async function main() {
   fs.writeFileSync("state.json", JSON.stringify(lastAgent));
   fs.writeFileSync("messages.json", JSON.stringify(lastAgent.messages));
 
-  await new Promise((resolve) => setTimeout(resolve, 1000));
   await runAgent(
     "What was my last query",
     lastAgent.threadId,
   );
   console.log("-- Done --");
 
-  // await new Promise((resolve) => setTimeout(resolve, 5000))
 }
 
 await main();
