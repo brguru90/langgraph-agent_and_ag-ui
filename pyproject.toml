@@ -1,0 +1,32 @@
+[project]
+name = "fds-doc"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ag-ui-protocol>=0.1.7",
+    "boto3>=1.39.17",
+    # "copilotkit>=0.2.0a0",
+    "fastapi>=0.115.0,<0.116.0",
+    "fastmcp>=2.10.6",
+    "grandalf>=0.8",
+    "langchain>=0.3.27",
+    "langchain-aws>=0.2.29",
+    "langchain-community>=0.3.27",
+    "langchain-mcp-adapters>=0.1.9",
+    "langgraph>=0.2.3,<0.6.2",
+    "pydantic>=2.11.0,<2.12.0",
+    "requests>=2.32.4",
+    "uvicorn>=0.35.0",
+    "ag-ui-langgraph>=0.0.5a1",
+    # ag-ui-langgraph is incompatible with copilotkit due to langgraph version conflicts
+    "langmem>=0.0.29",
+]
+
+[project.scripts]
+fds-doc= "poc.main:run"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"

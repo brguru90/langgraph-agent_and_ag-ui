@@ -1,0 +1,17 @@
+{
+  "name": "run_agent",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@ag-ui/client": "^0.0.35",
+    "@ag-ui/langgraph": "^0.0.7",
+    "fast-json-patch": "^3.1.1"
+  }
+}

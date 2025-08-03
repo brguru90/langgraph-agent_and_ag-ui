@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Node.js dependencies
+node_modules/
+**/node_modules/
+.DS_Store
+run_agent/node_modules
+my-ag-ui-app/node_modules
+ag-ui-sdk
+**/.DS_Store
