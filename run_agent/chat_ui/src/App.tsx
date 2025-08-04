@@ -34,7 +34,7 @@ function App() {
   } = useChatHistory();
 
   // Agent service (includes interrupt handling)
-  const {isRunning,totalTokenUsage,messages, chatWithAgent,clearChat,respondToLastInterrupt } = useAgentService();
+  const {isRunning,totalTokenUsage,messages, groupedMessages,chatWithAgent,clearChat,respondToLastInterrupt } = useAgentService();
 
   // Helper function to start a new chat
   const startNewChat = async (message: string) => {
@@ -137,6 +137,7 @@ function App() {
         <ChatMessagesContainer 
           chatMessages={messages}
           respondToLastInterrupt={respondToLastInterrupt}
+          groupedMessages={groupedMessages}
         />
       </div>
     </div>

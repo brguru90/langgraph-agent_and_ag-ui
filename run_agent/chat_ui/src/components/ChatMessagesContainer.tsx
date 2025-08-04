@@ -1,22 +1,20 @@
-import type { ChatDisplayMessage } from "../types";
+import type { ChatDisplayMessage, GroupedChatDisplayMessage } from "../types";
 import { InterruptMessageComponent } from "./InterruptMessageComponent";
 import { ToolCallGroupComponent } from "./ToolCallGroupComponent";
 import { RegularMessageGroupComponent } from "./RegularMessageGroupComponent";
-import { groupMessages } from "../utils/messageGrouping";
-import { useMemo } from "react";
 
 interface ChatMessagesContainerProps {
   chatMessages: ChatDisplayMessage[];
+  groupedMessages:GroupedChatDisplayMessage[];
   respondToLastInterrupt: (message: string) => void;
 }
 
 export function ChatMessagesContainer({
   chatMessages,
+  groupedMessages,
   respondToLastInterrupt
+  
 }: ChatMessagesContainerProps) {
-
-  // Group messages by type and conversation flow
-  const messageGroups = useMemo(() => groupMessages(chatMessages), [chatMessages]);
   
   if (chatMessages.length === 0) {
     return (
@@ -55,8 +53,8 @@ export function ChatMessagesContainer({
     >
       <div style={{ flex: 1, padding: "15px" }}>
         {/* Render grouped messages */}
-        {messageGroups.map((group) => {
-          if (group.type === 'interrupt') {
+        {groupedMessages.map((group) => {
+          if (group.group_type === 'interrupt') {
             return (
               <InterruptMessageComponent
                 key={group.id}
@@ -64,7 +62,7 @@ export function ChatMessagesContainer({
                 respondToLastInterrupt={respondToLastInterrupt}
               />
             );
-          } else if (group.type === 'tool') {
+          } else if (group.group_type === 'tool') {
             return (
               <ToolCallGroupComponent
                 key={group.id}
