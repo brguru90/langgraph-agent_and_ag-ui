@@ -283,7 +283,7 @@ export const useAgentService = (): UseAgentService => {
               messages_ref.current[messages_ref.current.length - 1];
             
             // Check if we have an existing message that can be used for tool calls
-            if (lastMessage && (lastMessage.message_type === "assistance" || lastMessage.message_type === "tool")) {
+            if (lastMessage && lastMessage.message_type === "tool") {
               // Change message type to "tool" to properly categorize tool call messages
               lastMessage.message_type = "tool";
               
@@ -337,6 +337,7 @@ export const useAgentService = (): UseAgentService => {
             const lastMessage =
               messages_ref.current[messages_ref.current.length - 1];
             if (lastMessage && lastMessage.message_type === "tool" && lastMessage.toolCalls) {
+              lastMessage.toolCalls[0].args=JSON.stringify(event.rawEvent?.event?.data?.input) ?? lastMessage.toolCalls[0].args
               const toolCall = lastMessage.toolCalls.find(
                 (tc) => tc.id === endEvent.toolCallId
               );
