@@ -6,3 +6,4 @@ export { ChatMessage } from "./ChatMessage";
 export { CurrentMessage } from "./CurrentMessage";
 export { InterruptPromptComponent } from "./InterruptPrompt";
 export { ChatMessagesContainer } from "./ChatMessagesContainer";
+export { GroupedMessageExample } from "./GroupedMessageExample";

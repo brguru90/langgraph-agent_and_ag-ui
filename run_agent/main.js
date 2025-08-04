@@ -196,10 +196,10 @@ async function runAgent(content, thread_id) {
       if (isResume) {
         // For resume calls, temporarily clear messages - let server handle state
         // & anyway without clearing the message the response to interrupt was not working for me
-        // agent.messages = []; // Clear messages for resume
-        const s=await get_state(agent.threadId)
-        console.log("messagess",s)
-        agent.messages=mapStateMessagesToAGUI(s.messages)
+        agent.messages = []; // Clear messages for resume
+        // const s=await get_state(agent.threadId)
+        // console.log("messagess",s.messages)
+        // agent.messages=mapStateMessagesToAGUI(s.messages)
       }
 
       agent
@@ -207,21 +207,21 @@ async function runAgent(content, thread_id) {
           onRunStartedEvent({ event }) {
             console.log(
               "🚀 Run started:",
-              event.runId,
-              Object.keys(event),
-              event.messages?.length,
-              event.messages?.map((m) => m.role),
-              content
+              // event.runId,
+              // Object.keys(event),
+              // event.messages?.length,
+              // event.messages?.map((m) => m.role),
+              // content
             );
           },
           onTextMessageStartEvent(event) {
-            console.log(
-              "🤖 AG-UI assistant: ",
-              Object.keys(event),
-              event.messages?.length,
-              event.messages?.map((m) => m.role),
-              content
-            );
+            // console.log(
+            //   "🤖 AG-UI assistant: ",
+            //   Object.keys(event),
+            //   event.messages?.length,
+            //   event.messages?.map((m) => m.role),
+            //   content
+            // );
           },
           onTextMessageContentEvent({ event }) {
             // console.log(JSON.stringify(event, null, 2));
@@ -264,7 +264,7 @@ async function runAgent(content, thread_id) {
                     command: {
                       resume: userChoice,
                     },
-                    node_name:"route"
+                    // node_name:"route"
                   },
                 };
                 // Recursively handle the resumed run with same agent instance (maintains threadId)
@@ -288,28 +288,28 @@ async function runAgent(content, thread_id) {
             reject(error);
           },
           
-          onStateSnapshotEvent(event) {
-            // entire snapshot
-            console.log(
-              "==onStateSnapshotEvent",
-              Object.keys(event),
-              event.messages.length,
-              event.messages.map((m) => m.role),
-              content
-            );
-            agent.messages = event.messages;
-          },
-          onStateDeltaEvent(event) {
-            // incremental update
-            console.log(
-              "++onStateDeltaEvent",
-              Object.keys(event),
-              event.messages.length,
-              event.messages.map((m) => m.role)
-            );
-            // its not triggering some reason, i will sync from API
-            // https://docs.ag-ui.com/concepts/state
-          },
+          // onStateSnapshotEvent(event) {
+          //   // entire snapshot
+          //   console.log(
+          //     "==onStateSnapshotEvent",
+          //     Object.keys(event),
+          //     event.messages.length,
+          //     event.messages.map((m) => m.role),
+          //     content
+          //   );
+          //   agent.messages = event.messages;
+          // },
+          // onStateDeltaEvent(event) {
+          //   // incremental update
+          //   console.log(
+          //     "++onStateDeltaEvent",
+          //     Object.keys(event),
+          //     event.messages.length,
+          //     event.messages.map((m) => m.role)
+          //   );
+          //   // its not triggering some reason, i will sync from API
+          //   // https://docs.ag-ui.com/concepts/state
+          // },
           onRunFinalized(event) {
             console.log(
               "✅ Run finalized:",
@@ -349,9 +349,8 @@ async function main() {
     "provide me documentation for button component"
   );
   console.log(lastAgent.threadId);
-  fs.writeFileSync("state.json", JSON.stringify(lastAgent));
-  fs.writeFileSync("messages.json", JSON.stringify(lastAgent.messages));
-
+  // fs.writeFileSync("state.json", JSON.stringify(lastAgent));
+  // // fs.writeFileSync("messages.json", JSON.stringify(lastAgent.messages));
   await runAgent(
     "What was my last query",
     lastAgent.threadId,

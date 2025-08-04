@@ -58,6 +58,13 @@ export interface ChatDisplayMessage {
   };
 }
 
+export interface GroupedChatDisplayMessage {
+ id: string | number;
+ messages: ChatDisplayMessage[];
+ group_type:ChatDisplayMessage['message_type']
+ partial: boolean;
+}
+
 export interface InterruptPrompt {
   id: string;
   message: string;
@@ -136,6 +143,7 @@ export interface RunData {
     command?: {
       resume: string;
     };
+    node_name?: "route" | "llm" | "tool"
   };
 }
 

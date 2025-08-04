@@ -1,3 +1,8 @@
 // Export all hooks
 export { useChatHistory } from "./useChatHistory";
-export { useAgentService } from "./useAgentService";
+export { 
+  useAgentService,
+  getCompleteGroupedMessages,
+  getPartialGroupedMessages,
+  getMessagesByType
+} from "./useAgentService";
