@@ -212,7 +212,7 @@ export const useAgentService = (): UseAgentService => {
   }, [groupMessagesByType]);
 
   const pushMessages = useCallback(
-    (event: MessageEvent): string | number => {
+    (event: MessageEvent):  number => {
       const return_id = (() => {
         switch (event.type) {
           case EventType.CUSTOM: {
@@ -228,7 +228,7 @@ export const useAgentService = (): UseAgentService => {
                     isActive: true,
                   },
                 });
-                return messages_ids.current;
+                return messages_ids.current-1;
               case "user_start_chat":
                 messages_ref.current.push({
                   id: messages_ids.current++,
@@ -236,7 +236,7 @@ export const useAgentService = (): UseAgentService => {
                   block: "content",
                   content: customEvent.value,
                 });
-                return messages_ids.current;
+                return messages_ids.current-1;
             }
             break;
           }
@@ -247,7 +247,7 @@ export const useAgentService = (): UseAgentService => {
               block: "start",
               content: "",
             });
-            return messages_ids.current;
+            return messages_ids.current-1;
           }
           case EventType.TEXT_MESSAGE_CONTENT: {
             const contentEvent = event as TextMessageContentEvent;
@@ -281,9 +281,12 @@ export const useAgentService = (): UseAgentService => {
             const toolEvent = event as ToolCallStartEvent;
             const lastMessage =
               messages_ref.current[messages_ref.current.length - 1];
-            if (lastMessage && lastMessage.message_type === "assistance") {
-              // Keep message type as "assistance" but add tool calls
-              // Don't change message type to "tool" to allow continued text content
+            
+            // Check if we have an existing message that can be used for tool calls
+            if (lastMessage && (lastMessage.message_type === "assistance" || lastMessage.message_type === "tool")) {
+              // Change message type to "tool" to properly categorize tool call messages
+              lastMessage.message_type = "tool";
+              
               if (!lastMessage.toolCalls) {
                 lastMessage.toolCalls = [];
               }
@@ -295,6 +298,21 @@ export const useAgentService = (): UseAgentService => {
               });
               // Update block to content when tool calls are happening
               lastMessage.block = "content";
+            } else {
+              // Create a new tool message if no existing message can be used
+              messages_ref.current.push({
+                id: messages_ids.current++,
+                message_type: "tool",
+                block: "content",
+                content: "",
+                toolCalls: [{
+                  id: toolEvent.toolCallId,
+                  name: toolEvent.toolCallName,
+                  args: "",
+                  isComplete: false,
+                }],
+              });
+              return messages_ids.current - 1;
             }
             return lastMessage?.id || -1;
           }
@@ -302,7 +320,7 @@ export const useAgentService = (): UseAgentService => {
             const argsEvent = event as ToolCallArgsEvent;
             const lastMessage =
               messages_ref.current[messages_ref.current.length - 1];
-            if (lastMessage && lastMessage.toolCalls) {
+            if (lastMessage && lastMessage.message_type === "tool" && lastMessage.toolCalls) {
               const toolCall = lastMessage.toolCalls.find(
                 (tc) => tc.id === argsEvent.toolCallId
               );
@@ -318,7 +336,7 @@ export const useAgentService = (): UseAgentService => {
             const endEvent = event as ToolCallEndEvent;
             const lastMessage =
               messages_ref.current[messages_ref.current.length - 1];
-            if (lastMessage && lastMessage.toolCalls) {
+            if (lastMessage && lastMessage.message_type === "tool" && lastMessage.toolCalls) {
               const toolCall = lastMessage.toolCalls.find(
                 (tc) => tc.id === endEvent.toolCallId
               );
@@ -339,7 +357,7 @@ export const useAgentService = (): UseAgentService => {
             const resultEvent = event as ToolCallResultEvent;
             const lastMessage =
               messages_ref.current[messages_ref.current.length - 1];
-            if (lastMessage && lastMessage.toolCalls) {
+            if (lastMessage && lastMessage.message_type === "tool" && lastMessage.toolCalls) {
               const toolCall = lastMessage.toolCalls.find(
                 (tc) => tc.id === resultEvent.toolCallId
               );
@@ -366,7 +384,7 @@ export const useAgentService = (): UseAgentService => {
                 errorEvent.message || "An error occurred during execution"
               }`,
             });
-            return messages_ids.current;
+            return messages_ids.current-1;
           }
           case EventType.STATE_DELTA:
           case EventType.STATE_SNAPSHOT: {
@@ -378,7 +396,7 @@ export const useAgentService = (): UseAgentService => {
         return -1;
       })();
       updateMessages();
-      return return_id;
+      return return_id as number;
     },
     [updateMessages]
   );
@@ -416,9 +434,9 @@ export const useAgentService = (): UseAgentService => {
           INTERRUPT_EVENT,
           (event) => {
             const detail = (event as CustomEvent).detail;
-            if (messages_ref.current[0].interruptData) {
-              messages_ref.current[0].interruptData.isActive = false;
-              messages_ref.current[0].interruptData.response = detail;
+            if (messages_ref.current[id]?.interruptData) {
+              messages_ref.current[id].interruptData.isActive = false;
+              messages_ref.current[id].interruptData.response = detail;
               updateMessages();
             }
             resolve(detail);
@@ -518,26 +536,73 @@ export const useAgentService = (): UseAgentService => {
                   console.log("");
                   pushMessages(event.event);
                 },
-                onToolCallStartEvent({ event }) {
-                  console.log(
-                    "🔧 Tool call start:",
-                    event.toolCallName,
-                    event.toolCallId
-                  );
-                  pushMessages(event);
-                },
-                onToolCallArgsEvent({ event }) {
-                  pushMessages(event);
-                },
-                onToolCallEndEvent({ event }) {
-                  console.log("🔧 Tool call end:", event.toolCallId);
-                  pushMessages(event);
-                },
-                onToolCallResultEvent({ event }) {
-                  if (event.content) {
-                    console.log("🔍 Tool call result:", event.content);
+                onRawEvent({event}){
+                  console.log("📡 Raw event:", event);
+                  
+                  // Handle tool call events via raw events
+                  if (event.event && typeof event.event === 'object') {
+                    const rawEventData = event.event;
+                    
+                    // Handle tool start event
+                    if (rawEventData.event === 'on_tool_start') {
+                      console.log(
+                        "🔧 Tool call start (raw):",
+                        rawEventData.name,
+                        rawEventData.run_id
+                      );
+                      console.log("tool==>", rawEventData.name);
+                      
+                      // Create a synthetic tool call start event for compatibility
+                      const syntheticEvent: ToolCallStartEvent = {
+                        type: EventType.TOOL_CALL_START,
+                        toolCallId: rawEventData.run_id,
+                        toolCallName: rawEventData.name,
+                        timestamp: Date.now(),
+                        rawEvent: event
+                      };
+                      pushMessages(syntheticEvent);
+                    }
+                    
+                    // Handle tool end event
+                    else if (rawEventData.event === 'on_tool_end') {
+                      console.log("🔧 Tool call end (raw):", rawEventData.run_id);
+                      console.log("tool==>", rawEventData.name);
+                      
+                      // Extract tool result content
+                      let toolResult = '';
+                      if (rawEventData.data && rawEventData.data.output) {
+                        if (typeof rawEventData.data.output === 'string') {
+                          toolResult = rawEventData.data.output;
+                        } else if (rawEventData.data.output.content) {
+                          toolResult = rawEventData.data.output.content;
+                        }
+                      }
+                      
+                      console.log("🔍 Tool call result (raw):", toolResult);
+                      console.log("tool==>", toolResult);
+                      
+                      // Create synthetic tool call end and result events for compatibility
+                      const syntheticEndEvent: ToolCallEndEvent = {
+                        type: EventType.TOOL_CALL_END,
+                        toolCallId: rawEventData.run_id,
+                        timestamp: Date.now(),
+                        rawEvent: event
+                      };
+                      
+                      const syntheticResultEvent: ToolCallResultEvent = {
+                        type: EventType.TOOL_CALL_RESULT,
+                        messageId: `msg-${rawEventData.run_id}`,
+                        toolCallId: rawEventData.run_id,
+                        content: toolResult,
+                        role: 'tool',
+                        timestamp: Date.now(),
+                        rawEvent: event
+                      };
+                      
+                      pushMessages(syntheticEndEvent);
+                      pushMessages(syntheticResultEvent);
+                    }
                   }
-                  pushMessages(event);
                 },
                 onRunFailed(error) {
                   console.error("❌ Run failed:", error);

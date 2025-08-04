@@ -14,6 +14,7 @@ import type {
   StateDeltaEvent,
   StateSnapshotEvent,
   CustomEvent,
+  RawEvent,
 } from "@ag-ui/client";
 
 export interface LangGraphMessage {
@@ -160,6 +161,7 @@ export type MessageEvent =
   | ToolCallResultEvent
   | StateDeltaEvent
   | StateSnapshotEvent
-  | CustomEvent;
+  | CustomEvent
+  | RawEvent;
 
 export const INTERRUPT_EVENT = "agent-interrupt";
