@@ -1,10 +1,11 @@
+import type { TokenUsage } from "../types";
+
 interface ChatHeaderProps {
   sidebarOpen: boolean;
   isRunning: boolean;
-  totalTokenUsage: { totalInput: number; totalOutput: number; totalTokens: number } | null;
+  totalTokenUsage: TokenUsage;
   onToggleSidebar: () => void;
   onClearChat: () => void;
-  onRunDemo: () => void;
 }
 
 export function ChatHeader({
@@ -13,7 +14,6 @@ export function ChatHeader({
   totalTokenUsage,
   onToggleSidebar,
   onClearChat,
-  onRunDemo,
 }: ChatHeaderProps) {
   return (
     <div
@@ -84,21 +84,6 @@ export function ChatHeader({
         }}
       >
         Clear Chat
-      </button>
-      
-      <button
-        onClick={onRunDemo}
-        style={{
-          background: "#3575dcff",
-          color: "white",
-          border: "none",
-          padding: "6px 12px",
-          borderRadius: "4px",
-          cursor: "pointer",
-          fontSize: "12px",
-        }}
-      >
-        Run Demo
       </button>
     </div>
   );

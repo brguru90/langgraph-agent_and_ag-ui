@@ -224,7 +224,7 @@ async function runAgent(content, thread_id) {
             );
           },
           onTextMessageContentEvent({ event }) {
-            console.log(JSON.stringify(event, null, 2));
+            // console.log(JSON.stringify(event, null, 2));
             process.stdout.write(event.delta);
           },
           onTextMessageEndEvent(event) {

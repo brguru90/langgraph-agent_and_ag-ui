@@ -1,5 +1,21 @@
 // Type definitions for the chat application
 
+import type {
+  BaseEvent,
+  RunErrorEvent,
+  RunStartedEvent,
+  TextMessageStartEvent,
+  TextMessageContentEvent,
+  TextMessageEndEvent,
+  ToolCallStartEvent,
+  ToolCallArgsEvent,
+  ToolCallEndEvent,
+  ToolCallResultEvent,
+  StateDeltaEvent,
+  StateSnapshotEvent,
+  CustomEvent,
+} from "@ag-ui/client";
+
 export interface LangGraphMessage {
   id: string;
   type: "human" | "ai" | "tool" | "system";
@@ -17,20 +33,16 @@ export interface LangGraphMessage {
 }
 
 export interface TokenUsage {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  model_name?: string;
+  totalInput: number;
+  totalOutput: number;
+  totalTokens: number;
 }
 
 export interface ChatDisplayMessage {
-  id: string;
+  id: string | number;
   message_type: "assistance" | "tool" | "interrupt" | "user";
-  role: "user" | "assistant" | "system";
-  content: string;
-  timestamp: Date;
-  isStreaming?: boolean;
-  isComplete?: boolean;
+  block: "start" | "end" | "content";
+  content?: string;
   tokenUsage?: TokenUsage;
   toolCalls?: {
     id: string;
@@ -42,8 +54,7 @@ export interface ChatDisplayMessage {
   interruptData?: {
     question: string;
     isActive: boolean;
-    response?: string;
-    responseType?: "yes" | "no" | "custom";
+    response?: "yes" | "no" | string;
   };
 }
 
@@ -127,3 +138,20 @@ export interface RunData {
     };
   };
 }
+
+export type MessageEvent =
+  | BaseEvent
+  | RunStartedEvent
+  | RunErrorEvent
+  | TextMessageStartEvent
+  | TextMessageContentEvent
+  | TextMessageEndEvent
+  | ToolCallStartEvent
+  | ToolCallArgsEvent
+  | ToolCallEndEvent
+  | ToolCallResultEvent
+  | StateDeltaEvent
+  | StateSnapshotEvent
+  | CustomEvent;
+
+export const INTERRUPT_EVENT = "agent-interrupt";

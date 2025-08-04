@@ -207,12 +207,18 @@ class MyAgent:
             max_summary_tokens=max_tokens/3.34,
             token_counter=count_tokens_approximately,
         )
-        response = self.llm.invoke(result.messages)
+        try:
+            response = self.llm.invoke(result.messages)
+        except Exception as e:
+            print(f"Error invoking LLM: {e}")
+            # Handle LLM invocation error gracefully
+            response = messages.AIMessage(content="An error occurred while invoking the LLM. Please try again later.")
+        
         # print("---LLM Response: ", response.content,"\n\n")
         
         # Always go to router after LLM response
         return Command(
-            update={'messages': result.messages,"summary": result.running_summary},
+            update={'messages': result.messages + [response], "summary": result.running_summary},
             goto="route"
         )
 

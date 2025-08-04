@@ -33,7 +33,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
             borderRadius: "4px",
             fontSize: "12px"
           }}>
-            <strong>Response ({message.interruptData.responseType}):</strong> {message.interruptData.response}
+            <strong>Response:</strong> {message.interruptData.response}
           </div>
         )}
         <div
@@ -44,7 +44,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
             textAlign: "right",
           }}
         >
-          {message.timestamp.toLocaleTimeString()}
+          {new Date().toLocaleTimeString()}
         </div>
       </div>
     );
@@ -107,7 +107,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
             textAlign: "right",
           }}
         >
-          {message.timestamp.toLocaleTimeString()}
+          {new Date().toLocaleTimeString()}
         </div>
       </div>
     );
@@ -116,17 +116,18 @@ export function ChatMessage({ message }: ChatMessageProps) {
   // Regular user/assistant message (may include both text and tool calls)
   const hasTextContent = message.content && message.content.trim().length > 0;
   const hasToolCalls = message.toolCalls && message.toolCalls.length > 0;
+  const isUserMessage = message.message_type === "user";
 
   return (
     <div
       style={{
-        alignSelf: message.role === "user" ? "flex-end" : "flex-start",
+        alignSelf: isUserMessage ? "flex-end" : "flex-start",
         maxWidth: "80%",
-        backgroundColor: message.role === "user" ? "#007acc" : "#fff",
-        color: message.role === "user" ? "white" : "#333",
+        backgroundColor: isUserMessage ? "#007acc" : "#fff",
+        color: isUserMessage ? "white" : "#333",
         padding: "12px 16px",
-        borderRadius: message.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-        border: message.role === "user" ? "none" : "1px solid #ddd",
+        borderRadius: isUserMessage ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+        border: isUserMessage ? "none" : "1px solid #ddd",
         boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
       }}
     >
@@ -143,7 +144,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
       )}
       
       {/* Tool calls section for assistant messages */}
-      {hasToolCalls && message.role === "assistant" && (
+      {hasToolCalls && !isUserMessage && (
         <div>
           <div style={{ fontSize: "12px", fontWeight: "bold", marginBottom: "8px", color: "#f59e0b" }}>
             🔧 Tool Operations
@@ -182,26 +183,25 @@ export function ChatMessage({ message }: ChatMessageProps) {
       {message.tokenUsage && (
         <div style={{ 
           fontSize: "10px", 
-          color: message.role === "user" ? "rgba(255,255,255,0.6)" : "#666",
+          color: isUserMessage ? "rgba(255,255,255,0.6)" : "#666",
           marginTop: "6px",
           padding: "4px 8px",
-          backgroundColor: message.role === "user" ? "rgba(255,255,255,0.1)" : "#f5f5f5",
+          backgroundColor: isUserMessage ? "rgba(255,255,255,0.1)" : "#f5f5f5",
           borderRadius: "4px",
           fontFamily: "monospace"
         }}>
-          📊 {message.tokenUsage.input_tokens} input + {message.tokenUsage.output_tokens} output = {message.tokenUsage.total_tokens} tokens
-          {message.tokenUsage.model_name && ` (${message.tokenUsage.model_name})`}
+          📊 {message.tokenUsage.totalInput} input + {message.tokenUsage.totalOutput} output = {message.tokenUsage.totalTokens} tokens
         </div>
       )}
       <div
         style={{
           fontSize: "10px",
-          color: message.role === "user" ? "rgba(255,255,255,0.7)" : "#999",
+          color: isUserMessage ? "rgba(255,255,255,0.7)" : "#999",
           marginTop: "8px",
           textAlign: "right",
         }}
       >
-        {message.timestamp.toLocaleTimeString()}
+        {new Date().toLocaleTimeString()}
       </div>
     </div>
   );

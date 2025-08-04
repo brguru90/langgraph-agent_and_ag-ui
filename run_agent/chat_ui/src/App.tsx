@@ -8,7 +8,6 @@ import { ChatInput } from "./components/ChatInput";
 import { ChatMessagesContainer } from "./components/ChatMessagesContainer";
 
 // Hooks
-import { useChatState } from "./hooks/useChatState";
 import { useChatHistory } from "./hooks/useChatHistory";
 import { useAgentService } from "./hooks/useAgentService";
 
@@ -23,24 +22,6 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userInput, setUserInput] = useState("");
 
-  // Chat state management
-  const {
-    chatMessages,
-    currentMessage,
-    currentToolCalls,
-    interruptPrompt,
-    isRunning,
-    currentTokenUsage,
-    totalTokenUsage,
-    addChatMessage,
-    clearChat,
-    setChatMessages,
-    setCurrentMessage,
-    setCurrentToolCalls,
-    setInterruptPrompt,
-    setIsRunning,
-    setCurrentTokenUsage,
-  } = useChatState();
 
   // Chat history management
   const {
@@ -53,16 +34,7 @@ function App() {
   } = useChatHistory();
 
   // Agent service (includes interrupt handling)
-  const { chatWithAgent } = useAgentService({
-    setIsRunning,
-    currentMessage,
-    setCurrentMessage,
-    currentToolCalls,
-    setCurrentToolCalls,
-    setCurrentTokenUsage,
-    setChatMessages,
-    setInterruptPrompt,
-  });
+  const {isRunning,totalTokenUsage,messages, chatWithAgent,clearChat,respondToLastInterrupt } = useAgentService();
 
   // Helper function to start a new chat
   const startNewChat = async (message: string) => {
@@ -72,9 +44,7 @@ function App() {
       
       // Clear current chat messages when starting a new thread
       clearChat();
-      
-      // Add user message to chat
-      addChatMessage("user", message, "user");
+
       
       return await chatWithAgent(message, newThread.id);
     } catch (error) {
@@ -87,7 +57,7 @@ function App() {
   const continueChat = async (message: string, threadId: string) => {
     try {
       // Add user message to chat first
-      addChatMessage("user", message, "user");
+      respondToLastInterrupt(message);
       
       await addMessageToThread(threadId, "user", message);
       
@@ -128,24 +98,6 @@ function App() {
     setSelectedThreadId(threadId);
   };
 
-  // Enhanced main function with history support
-  const runDemo = async () => {
-    console.log("🚀 Starting main execution...");
-
-    const lastAgent = await startNewChat("provide me documentation for button component");
-    
-    if (lastAgent?.threadId) {
-      console.log(`First agent completed. Thread ID: ${lastAgent.threadId}`);
-      
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      
-      console.log("🔄 Running second query...");
-      await continueChat("What was my last query", lastAgent.threadId);
-    }
-    
-    console.log("-- Done --");
-    console.log("🎉 All executions completed!");
-  };
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "monospace" }}>
@@ -170,7 +122,6 @@ function App() {
           totalTokenUsage={totalTokenUsage}
           onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           onClearChat={clearChat}
-          onRunDemo={runDemo}
         />
 
         {/* Chat Input Area */}
@@ -183,12 +134,9 @@ function App() {
         />
 
         {/* Chat Messages Area */}
-        <ChatMessagesContainer
-          chatMessages={chatMessages}
-          currentMessage={currentMessage}
-          currentTokenUsage={currentTokenUsage}
-          currentToolCalls={currentToolCalls}
-          interruptPrompt={interruptPrompt}
+        <ChatMessagesContainer 
+          chatMessages={messages}
+          respondToLastInterrupt={respondToLastInterrupt}
         />
       </div>
     </div>

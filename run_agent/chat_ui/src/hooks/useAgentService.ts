@@ -1,541 +1,449 @@
-import { useCallback, useRef, useEffect } from "react";
-import { HttpAgent } from "@ag-ui/client";
-import type { RunData, ChatDisplayMessage, TokenUsage, InterruptPrompt } from "../types";
+import { useCallback, useRef, useState } from "react";
+import {
+  HttpAgent,
+  type CustomEvent as MessageCustomEvent,
+  EventType,
+  type TextMessageContentEvent,
+  type ToolCallStartEvent,
+  type ToolCallArgsEvent,
+  type ToolCallEndEvent,
+  type ToolCallResultEvent,
+  type RunErrorEvent,
+} from "@ag-ui/client";
+import type {
+  RunData,
+  ChatDisplayMessage,
+  TokenUsage,
+  MessageEvent,
+} from "../types";
+import { INTERRUPT_EVENT } from "../types";
 import { getAgentState } from "../services/api";
 import { mapStateMessagesToAGUI } from "../services/messageMapper";
 import { randomUUID } from "../utils";
 
-interface UseAgentServiceProps {
-  setIsRunning: (running: boolean) => void;
-  currentMessage: ChatDisplayMessage | null;
-  setCurrentMessage: (message: ChatDisplayMessage | null) => void;
-  currentToolCalls: Map<string, {
-    id: string;
-    name: string;
-    args: string;
-    result?: string;
-    isComplete?: boolean;
-  }>;
-  setCurrentToolCalls: React.Dispatch<React.SetStateAction<Map<string, {
-    id: string;
-    name: string;
-    args: string;
-    result?: string;
-    isComplete?: boolean;
-  }>>>;
-  setCurrentTokenUsage: (usage: TokenUsage | null) => void;
-  setChatMessages: React.Dispatch<React.SetStateAction<ChatDisplayMessage[]>>;
-  setInterruptPrompt: React.Dispatch<React.SetStateAction<InterruptPrompt | null>>;
+export interface UseAgentService {
+  isRunning: boolean;
+  messages: ChatDisplayMessage[];
+  totalTokenUsage: TokenUsage;
+  chatWithAgent: (message: string, threadId: string) => Promise<void>;
+  clearChat: () => void;
+  respondToLastInterrupt: (message: string) => void;
 }
 
-export const useAgentService = ({
-  setIsRunning,
-  currentMessage,
-  setCurrentMessage,
-  currentToolCalls,
-  setCurrentToolCalls,
-  setCurrentTokenUsage,
-  setChatMessages,
-  setInterruptPrompt,
-}: UseAgentServiceProps) => {
-  
-  // Use refs to track mutable state that needs to be accessed in frequently called callbacks
-  const currentMessageRef = useRef<ChatDisplayMessage | null>(null);
-  const currentToolCallsRef = useRef<Map<string, {
-    id: string;
-    name: string;
-    args: string;
-    result?: string;
-    isComplete?: boolean;
-  }>>(new Map());
-  
-  // Sync refs with state
-  useEffect(() => {
-    currentMessageRef.current = currentMessage;
-  }, [currentMessage]);
-  
-  useEffect(() => {
-    currentToolCallsRef.current = currentToolCalls;
-  }, [currentToolCalls]);
-  
-  const handleInterrupt = useCallback((message: string): Promise<string> => {
-    return new Promise((resolve) => {
-      const interruptId = randomUUID();
-      
-      // Add interrupt message to chat
-      const interruptMessage: ChatDisplayMessage = {
-        id: interruptId,
-        message_type: "interrupt",
-        role: "system",
-        content: message,
-        timestamp: new Date(),
-        isComplete: false,
-        interruptData: {
-          question: message,
-          isActive: true,
-        }
-      };
-      
-      setChatMessages((prev) => [...prev, interruptMessage]);
-      
-      const onSubmit = (response: string) => {
-        // Determine response type
-        const responseType: "yes" | "no" | "custom" = 
-          response.toLowerCase().trim() === "yes" ? "yes" :
-          response.toLowerCase().trim() === "no" ? "no" : "custom";
-        
-        // Update the interrupt message with response
-        setChatMessages((prev) => 
-          prev.map(msg => 
-            msg.id === interruptId 
-              ? {
-                  ...msg,
-                  isComplete: true,
-                  interruptData: {
-                    ...msg.interruptData!,
-                    isActive: false,
-                    response,
-                    responseType
-                  }
-                }
-              : msg
-          )
-        );
-        
-        setInterruptPrompt(null);
-        resolve(response);
-      };
-      
-      const onCancel = () => {
-        // Update the interrupt message as cancelled
-        setChatMessages((prev) => 
-          prev.map(msg => 
-            msg.id === interruptId 
-              ? {
-                  ...msg,
-                  isComplete: true,
-                  interruptData: {
-                    ...msg.interruptData!,
-                    isActive: false,
-                    response: "",
-                    responseType: "no"
-                  }
-                }
-              : msg
-          )
-        );
-        
-        setInterruptPrompt(null);
-        resolve("");
-      };
-      
-      setInterruptPrompt({
-        id: interruptId,
-        message,
-        isActive: true,
-        onSubmit,
-        onCancel,
-      });
-      
-      // Log the interrupt to the console as well
-      console.log(`\n⚠️ ${message}`);
-    });
-  }, [setChatMessages, setInterruptPrompt]);
-  
-  const chatWithAgent = useCallback(
-    async function chatWithAgent(
-      content: string,
-      thread_id?: string
-    ): Promise<{
-      threadId: string;
-      originalRunId: string;
-    }> {
-      setIsRunning(true);
+export const useAgentService = (): UseAgentService => {
+  const messages_ids = useRef<number>(0);
+  const messages_ref = useRef<ChatDisplayMessage[]>([]);
+  const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
+  const [isRunning, setIsRunning] = useState(false);
+  const [totalTokenUsage, setTotalTokenUsage] = useState<TokenUsage>({
+    totalInput: 0,
+    totalOutput: 0,
+    totalTokens: 0,
+  });
 
+  const updateMessages = (messages: ChatDisplayMessage[]) => {
+    setMessages(messages);
+  };
+
+  const pushMessages = useCallback((event: MessageEvent): string | number => {
+    const return_id = (() => {
+      switch (event.type) {
+        case EventType.CUSTOM: {
+          const customEvent = event as MessageCustomEvent;
+          switch (customEvent.name) {
+            case "on_interrupt":
+              messages_ref.current.push({
+                id: messages_ids.current++,
+                message_type: "interrupt",
+                block: "start",
+                interruptData: {
+                  question: customEvent.value,
+                  isActive: true,
+                },
+              });
+              return messages_ids.current;
+            case "user_start_chat":
+              messages_ref.current.push({
+                id: messages_ids.current++,
+                message_type: "user",
+                block: "content",
+                content: customEvent.value,
+              });
+              return messages_ids.current;
+          }
+          break;
+        }
+        case EventType.TEXT_MESSAGE_START: {
+          messages_ref.current.push({
+            id: messages_ids.current++,
+            message_type: "assistance",
+            block: "start",
+            content: "",
+          });
+          return messages_ids.current;
+        }
+        case EventType.TEXT_MESSAGE_CONTENT: {
+          const contentEvent = event as TextMessageContentEvent;
+          const lastMessage =
+            messages_ref.current[messages_ref.current.length - 1];
+          if (
+            lastMessage &&
+            (lastMessage.message_type === "assistance" ||
+              lastMessage.message_type === "tool")
+          ) {
+            lastMessage.content =
+              (lastMessage.content || "") + contentEvent.delta;
+            lastMessage.block = "content";
+          }
+          return lastMessage?.id || -1;
+        }
+        case EventType.TEXT_MESSAGE_END: {
+          // Message is complete, mark it as ended
+          const lastMessage =
+            messages_ref.current[messages_ref.current.length - 1];
+          if (
+            lastMessage &&
+            (lastMessage.message_type === "assistance" ||
+              lastMessage.message_type === "tool")
+          ) {
+            lastMessage.block = "end";
+          }
+          return lastMessage?.id || -1;
+        }
+        case EventType.TOOL_CALL_START: {
+          const toolEvent = event as ToolCallStartEvent;
+          const lastMessage =
+            messages_ref.current[messages_ref.current.length - 1];
+          if (lastMessage && lastMessage.message_type === "assistance") {
+            // Keep message type as "assistance" but add tool calls
+            // Don't change message type to "tool" to allow continued text content
+            if (!lastMessage.toolCalls) {
+              lastMessage.toolCalls = [];
+            }
+            lastMessage.toolCalls.push({
+              id: toolEvent.toolCallId,
+              name: toolEvent.toolCallName,
+              args: "",
+              isComplete: false,
+            });
+            // Update block to content when tool calls are happening
+            lastMessage.block = "content";
+          }
+          return lastMessage?.id || -1;
+        }
+        case EventType.TOOL_CALL_ARGS: {
+          const argsEvent = event as ToolCallArgsEvent;
+          const lastMessage =
+            messages_ref.current[messages_ref.current.length - 1];
+          if (lastMessage && lastMessage.toolCalls) {
+            const toolCall = lastMessage.toolCalls.find(
+              (tc) => tc.id === argsEvent.toolCallId
+            );
+            if (toolCall) {
+              toolCall.args += argsEvent.delta || "";
+            }
+            // Keep block as content while receiving args
+            lastMessage.block = "content";
+          }
+          return lastMessage?.id || -1;
+        }
+        case EventType.TOOL_CALL_END: {
+          const endEvent = event as ToolCallEndEvent;
+          const lastMessage =
+            messages_ref.current[messages_ref.current.length - 1];
+          if (lastMessage && lastMessage.toolCalls) {
+            const toolCall = lastMessage.toolCalls.find(
+              (tc) => tc.id === endEvent.toolCallId
+            );
+            if (toolCall) {
+              toolCall.isComplete = true;
+            }
+            // Check if all tool calls are complete to determine block status
+            const allComplete = lastMessage.toolCalls.every(
+              (tc) => tc.isComplete
+            );
+            if (allComplete) {
+              lastMessage.block = "content"; // Keep as content, will be set to end by TEXT_MESSAGE_END
+            }
+          }
+          return lastMessage?.id || -1;
+        }
+        case EventType.TOOL_CALL_RESULT: {
+          const resultEvent = event as ToolCallResultEvent;
+          const lastMessage =
+            messages_ref.current[messages_ref.current.length - 1];
+          if (lastMessage && lastMessage.toolCalls) {
+            const toolCall = lastMessage.toolCalls.find(
+              (tc) => tc.id === resultEvent.toolCallId
+            );
+            if (toolCall) {
+              toolCall.result = resultEvent.content || "";
+            }
+            // Keep block as content while receiving results
+            lastMessage.block = "content";
+          }
+          return lastMessage?.id || -1;
+        }
+        case EventType.RUN_STARTED: {
+          // Run started - could be used for loading states
+          return -1;
+        }
+        case EventType.RUN_ERROR: {
+          const errorEvent = event as RunErrorEvent;
+          // Handle run errors by adding an error message with assistance type
+          messages_ref.current.push({
+            id: messages_ids.current++,
+            message_type: "assistance",
+            block: "end",
+            content: `❌ Error: ${
+              errorEvent.message || "An error occurred during execution"
+            }`,
+          });
+          return messages_ids.current;
+        }
+        case EventType.STATE_DELTA:
+        case EventType.STATE_SNAPSHOT: {
+          // State events - these might be used for debugging or state management
+          // For now, we'll just ignore them in the UI
+          return -1;
+        }
+      }
+      return -1;
+    })();
+    updateMessages(messages_ref.current);
+    return return_id;
+  }, []);
+
+
+
+  const clearChat = useCallback(() => {
+    messages_ids.current = 0;
+    messages_ref.current = [];
+    setMessages([]);
+    setTotalTokenUsage({
+      totalInput: 0,
+      totalOutput: 0,
+      totalTokens: 0,
+    });
+  }, []);
+
+  const respondToLastInterrupt = useCallback((message: string) => {
+    const event = new CustomEvent(INTERRUPT_EVENT, { detail: message });
+    document.dispatchEvent(event);
+  }, []);
+
+  const handleInterrupt = useCallback(
+    (interruptData: unknown): Promise<string> => {
+      const customEvent: MessageCustomEvent = {
+        type: EventType.CUSTOM,
+        name: "on_interrupt",
+        value: interruptData,
+      };
+      const id = pushMessages(customEvent);
+      if (id === -1) return Promise.reject("Failed to push messages");
+      return new Promise((resolve) => {
+        document.addEventListener(INTERRUPT_EVENT, (event) => {
+          const detail = (event as CustomEvent).detail;
+          if (messages_ref.current[0].interruptData) {
+            messages_ref.current[0].interruptData.isActive = false;
+            messages_ref.current[0].interruptData.response = detail;
+            updateMessages(messages_ref.current);
+          }
+          resolve(detail);
+        });
+      });
+    },
+    [pushMessages]
+  );
+
+  const chatWithAgent = useCallback(
+    async (message: string, threadId: string): Promise<void> => {
+      setIsRunning(true);
       const agent = await (async () => {
-        if (!thread_id) {
+        if (!threadId) {
           return new HttpAgent({
             url: `http://localhost:8000/ag-ui/`,
+            // debug: true,
           });
         }
-        const state = await getAgentState(thread_id);
+        const state = await getAgentState(threadId);
         return new HttpAgent({
           url: `http://localhost:8000/ag-ui/`,
           // debug: true,
-          threadId: thread_id,
+          threadId: threadId,
           initialState: state,
           initialMessages: mapStateMessagesToAGUI(state.messages),
         });
       })();
-
-      console.log("🆔 Thread ID:", agent.threadId);
-      console.log("------ Your query:", content);
-
       agent.messages.push({
         id: randomUUID(),
         role: "user",
-        content: content,
+        content: message,
       });
+      pushMessages({
+        type: EventType.CUSTOM,
+        name: "user_start_chat",
+        value: message,
+      });
+      const runId = randomUUID();
+      console.log("🆔 Thread ID:", agent.threadId);
+      console.log("------ Your query:", message);
 
-      const originalRunId = randomUUID(); // Create runId once and reuse it
-
-      // Function to handle a single conversation run with interrupt handling
       async function runWithInterruptHandling(
         runData: RunData,
         isResume = false
-      ): Promise<void> {
-        return new Promise((resolve, reject) => {
-          // For resume operations, restore state from server
-          if (isResume) {
-            // For resume calls, restore messages from server state
-            getAgentState(agent.threadId).then(state => {
-              console.log("Restoring messages from state:", state.messages?.length);
-              agent.messages = mapStateMessagesToAGUI(state.messages);
-              executeAgent();
-            }).catch((error) => {
-              console.error("Failed to restore state:", error);
-              executeAgent(); // Continue anyway
-            });
-            return; // Exit early, executeAgent will be called in the then block
-          }
+      ) {
+        if (isResume) {
+          const s = await getAgentState(agent.threadId);
+          console.log("messagess", s);
+          agent.messages = mapStateMessagesToAGUI(s.messages);
+        }
 
-          executeAgent();
-
-          function executeAgent() {
-            agent
-              .runAgent(runData, {
-              onRunStartedEvent({ event }) {
+        return new Promise<void>((resolve, reject) => {
+          agent
+            .runAgent(runData, {
+              onRunStartedEvent(event) {
                 console.log(
                   "🚀 Run started:",
-                  event.runId,
+                  event.event.runId,
                   Object.keys(event),
-                  content
+                  event.messages?.length,
+                  event.messages?.map((m) => m.role),
+                  message
                 );
+                pushMessages(event.event);
               },
-              
-              onTextMessageStartEvent({ event }) {
+              onTextMessageStartEvent(event) {
                 console.log(
                   "🤖 AG-UI assistant: ",
                   Object.keys(event),
-                  content
+                  event.messages?.length,
+                  event.messages?.map((m) => m.role),
+                  message
                 );
-                
-                // Create new current message for streaming
-                const newMessage: ChatDisplayMessage = {
-                  id: event.messageId,
-                  message_type: "assistance",
-                  role: "assistant",
-                  content: "",
-                  timestamp: new Date(),
-                  isStreaming: true,
-                  isComplete: false,
-                };
-                
-                setCurrentMessage(newMessage);
-                currentMessageRef.current = newMessage;
-                
-                // Clear any existing tool calls
-                setCurrentToolCalls(new Map());
-                currentToolCallsRef.current = new Map();
+                pushMessages(event.event);
               },
-              
               onTextMessageContentEvent({ event }) {
-                console.log("📝 Streaming content delta:", event.delta);
-                
-                // Update current message with new content using ref for latest state
-                const currentMsg = currentMessageRef.current;
-                if (currentMsg && currentMsg.id === event.messageId) {
-                  const updatedMessage = {
-                    ...currentMsg,
-                    content: currentMsg.content + event.delta,
-                  };
-                  setCurrentMessage(updatedMessage);
-                  currentMessageRef.current = updatedMessage;
-                }
+                // console.log(JSON.stringify(event, null, 2));
+                console.log(event.delta);
+                pushMessages(event);
               },
-              
-              onTextMessageEndEvent({ event }) {
-                console.log("🏁 Text message ended for messageId:", event.messageId);
-                
-                // Mark current message as complete but keep it as current until run finalizes
-                const currentMsg = currentMessageRef.current;
-                if (currentMsg && currentMsg.id === event.messageId) {
-                  const finalMessage = {
-                    ...currentMsg,
-                    isStreaming: false,
-                    isComplete: true,
-                  };
-                  setCurrentMessage(finalMessage);
-                  currentMessageRef.current = finalMessage;
-                }
+              onTextMessageEndEvent(event) {
+                console.log("");
+                pushMessages(event.event);
               },
-              
               onToolCallStartEvent({ event }) {
                 console.log(
                   "🔧 Tool call start:",
                   event.toolCallName,
                   event.toolCallId
                 );
-                
-                // Add new tool call to map
-                const newToolCall = {
-                  id: event.toolCallId,
-                  name: event.toolCallName,
-                  args: "",
-                  isComplete: false,
-                };
-                
-                setCurrentToolCalls(prev => {
-                  const newMap = new Map(prev);
-                  newMap.set(event.toolCallId, newToolCall);
-                  currentToolCallsRef.current = newMap;
-                  return newMap;
-                });
+                pushMessages(event);
               },
-              
               onToolCallArgsEvent({ event }) {
-                console.log("🔧 Tool call args delta:", event.delta);
-                
-                // Update tool call arguments using ref for latest state
-                setCurrentToolCalls(prev => {
-                  const newMap = new Map(prev);
-                  const existingCall = newMap.get(event.toolCallId);
-                  if (existingCall) {
-                    newMap.set(event.toolCallId, {
-                      ...existingCall,
-                      args: existingCall.args + event.delta,
-                    });
-                  }
-                  currentToolCallsRef.current = newMap;
-                  return newMap;
-                });
+                pushMessages(event);
               },
-              
               onToolCallEndEvent({ event }) {
                 console.log("🔧 Tool call end:", event.toolCallId);
-                
-                // Mark tool call as complete
-                setCurrentToolCalls(prev => {
-                  const newMap = new Map(prev);
-                  const existingCall = newMap.get(event.toolCallId);
-                  if (existingCall) {
-                    newMap.set(event.toolCallId, {
-                      ...existingCall,
-                      isComplete: true,
-                    });
-                  }
-                  currentToolCallsRef.current = newMap;
-                  return newMap;
-                });
+                pushMessages(event);
               },
-              
               onToolCallResultEvent({ event }) {
-                console.log("🔍 Tool call result:", event.content);
-                
-                // Update tool call with result
-                setCurrentToolCalls(prev => {
-                  const newMap = new Map(prev);
-                  const existingCall = newMap.get(event.toolCallId);
-                  if (existingCall) {
-                    newMap.set(event.toolCallId, {
-                      ...existingCall,
-                      result: event.content,
-                      isComplete: true,
-                    });
-                  }
-                  currentToolCallsRef.current = newMap;
-                  return newMap;
-                });
+                if (event.content) {
+                  console.log("🔍 Tool call result:", event.content);
+                }
+                pushMessages(event);
               },
-              
+              onRunFailed(error) {
+                console.error("❌ Run failed:", error);
+              },
               async onCustomEvent({ event }) {
                 console.log("📋 Custom event received:", event.name);
                 if (event.name === "on_interrupt") {
                   try {
                     const userChoice = await handleInterrupt(event.value);
                     console.log(`User responded: ${userChoice}`);
-                    
-                    // Resume with the user's choice using the same agent instance
                     const resumeRunData = {
-                      runId: originalRunId, // Keep the same runId
+                      runId: runId,
                       forwardedProps: {
                         command: {
                           resume: userChoice,
                         },
-                        node_name: "route"
+                        node_name: "route",
                       },
                     };
-                    
-                    // Recursively handle the resumed run with same agent instance
                     await runWithInterruptHandling(resumeRunData, true);
-                  } catch (error) {
-                    console.error("Error handling interrupt:", error instanceof Error ? error.message : error);
+                  } catch (error: unknown) {
+                    if (error instanceof Error) {
+                      console.error("Error handling interrupt:", error.message);
+                    } else {
+                      console.error("Error handling interrupt:", String(error));
+                    }
                   }
                 }
               },
-              
-              onRunFailed({ error }) {
-                console.error("❌ Run failed:", error);
-                reject(new Error(`Run failed: ${error.message || 'Unknown error'}`));
+              onRunErrorEvent(error) {
+                console.error("AG-UI Agent error:", error);
+                reject(error);
               },
-              
-              onStateSnapshotEvent(event) {
-                console.log(
-                  "==onStateSnapshotEvent",
-                  Object.keys(event),
-                  event.messages?.length,
-                  content
-                );
-                // Update agent messages with snapshot (like in main.js)
-                agent.messages = event.messages;
-              },
-              
-              onStateDeltaEvent(event) {
-                console.log(
-                  "++onStateDeltaEvent",
-                  Object.keys(event),
-                  event.messages?.length
-                );
-                // Apply delta updates if needed
-              },
-              
-              onRawEvent({ event: rawEventData }) {
-                // Check for token usage in chat model end events
-                if (rawEventData.rawEvent?.event === "on_chat_model_end" && 
-                    rawEventData.rawEvent?.data?.output?.usage_metadata) {
-                  const usage = rawEventData.rawEvent.data.output.usage_metadata;
-                  const modelName = rawEventData.rawEvent.data.output.response_metadata?.model_name;
-                  
-                  setCurrentTokenUsage({
-                    input_tokens: usage.input_tokens || 0,
-                    output_tokens: usage.output_tokens || 0,
-                    total_tokens: usage.total_tokens || 0,
-                    model_name: modelName
-                  });
-                  
-                  console.log(`📊 Token usage: ${usage.input_tokens} input + ${usage.output_tokens} output = ${usage.total_tokens} total tokens (${modelName})`);
-                }
-                
-                // Also check for token usage in stream events
-                if (rawEventData.rawEvent?.event === "on_chat_model_stream" && 
-                    rawEventData.rawEvent?.data?.chunk?.usage_metadata) {
-                  const usage = rawEventData.rawEvent.data.chunk.usage_metadata;
-                  const modelName = rawEventData.rawEvent.data.chunk.response_metadata?.model_name;
-                  
-                  setCurrentTokenUsage({
-                    input_tokens: usage.input_tokens || 0,
-                    output_tokens: usage.output_tokens || 0,
-                    total_tokens: usage.total_tokens || 0,
-                    model_name: modelName
-                  });
-                  
-                  console.log(`📊 Token usage (streaming): ${usage.input_tokens} input + ${usage.output_tokens} output = ${usage.total_tokens} total tokens (${modelName})`);
-                }
-              },
-              
-              onRunFinalized(event) {
-                console.log(
-                  `✅ Run finalized - ${
-                    event.messages?.length || 0
-                  } messages`,
-                  Object.keys(event),
-                  event.messages?.map((m: { role: string }) => m.role),
-                  content
-                );
-                
-                // When the run is finalized, we should finalize the current message
-                console.log("🏁 Run finalized - finalizing current message");
-                const currentMsg = currentMessageRef.current;
-                if (currentMsg) {
-                  const finalMessage = {
-                    ...currentMsg,
-                    isComplete: true,
-                    isStreaming: false,
-                    // Add tool calls if any
-                    toolCalls: currentToolCallsRef.current.size > 0 ? 
-                      Array.from(currentToolCallsRef.current.values()) : undefined
-                  };
-                  
-                  // Add message to chat history
-                  setChatMessages(prev => {
-                    // Check if message already exists to avoid duplicates
-                    const existingIndex = prev.findIndex(msg => msg.id === finalMessage.id);
-                    if (existingIndex >= 0) {
-                      // Update existing message
-                      const newMessages = [...prev];
-                      newMessages[existingIndex] = finalMessage;
-                      return newMessages;
-                    } else {
-                      // Add new message
-                      return [...prev, finalMessage];
-                    }
-                  });
-                  
-                  console.log("🏁 Message finalized and added to chat history:", finalMessage.id);
-                  
-                  // Clear current message state
-                  setCurrentMessage(null);
-                  setCurrentToolCalls(new Map());
-                  currentMessageRef.current = null;
-                  currentToolCallsRef.current = new Map();
-                }
-                
-                // Mark run as completed
-                setIsRunning(false);
-                resolve();
-              },
+              // onStateSnapshotEvent(event) {
+              //   // console.log(
+              //   //   "==onStateSnapshotEvent",
+              //   //   Object.keys(event),
+              //   //   event.messages.length,
+              //   //   event.messages.map((m) => m.role),
+              //   //   message
+              //   // );
+              //   agent.messages = event.messages;
+              // },
+              // onStateDeltaEvent(event) {
+              //   // console.log(
+              //   //   "++onStateDeltaEvent",
+              //   //   Object.keys(event),
+              //   //   event.messages.length,
+              //   //   event.messages.map((m) => m.role)
+              //   // );
+              // },
+              // onRunFinalized(event) {
+              //   console.log(
+              //     "✅ Run finalized:",
+              //     Object.keys(event),
+              //     event.messages?.length,
+              //     event.messages?.map((m) => m.role),
+              //     message
+              //   );
+              // },
             })
             .then(() => {
-              console.log("✅ Agent execution completed successfully");
-              // Don't resolve here, wait for onRunFinalized
+              resolve();
             })
             .catch((error) => {
-              console.error("❌ Agent execution failed:", error);
-              setIsRunning(false);
+              console.log(error);
               reject(error);
             });
-          }
         });
       }
 
       try {
         await runWithInterruptHandling({
-          runId: originalRunId,
-          // Don't explicitly pass threadId initially - let agent manage it
+          runId,
         });
 
         console.log("✅ Execution completed successfully.");
       } catch (error) {
         console.error("❌ Error running agent:", error);
-        // On error, ensure we clean up the current message state
-        const currentMsg = currentMessageRef.current;
-        if (currentMsg) {
-          const errorMessage = {
-            ...currentMsg,
-            isComplete: true,
-            isStreaming: false
-          };
-          setChatMessages(prev => [...prev, errorMessage]);
-          setCurrentMessage(null);
-          setCurrentToolCalls(new Map());
-          currentMessageRef.current = null;
-          currentToolCallsRef.current = new Map();
-        }
-        
-        // Mark run as completed even on error
+      } finally {
         setIsRunning(false);
       }
-
-      return {
-        threadId: agent.threadId,
-        originalRunId
-      };
     },
-    [setIsRunning, handleInterrupt, setCurrentMessage, setCurrentToolCalls, setCurrentTokenUsage, setChatMessages]
+    [setIsRunning, pushMessages, handleInterrupt]
   );
 
   return {
+    messages,
+    isRunning,
+    totalTokenUsage,
     chatWithAgent,
-    handleInterrupt,
+    clearChat,
+    respondToLastInterrupt,
   };
 };

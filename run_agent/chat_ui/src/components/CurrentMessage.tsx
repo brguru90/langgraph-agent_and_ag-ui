@@ -33,7 +33,7 @@ export function CurrentMessage({ currentMessage, currentTokenUsage, currentToolC
         }}
       >
         <div style={{ fontSize: "14px", fontWeight: "bold", marginBottom: "10px", color: "#f59e0b" }}>
-          🔧 Tool Operations {currentMessage.isStreaming && <span style={{ opacity: 0.5, animation: "blink 1s infinite" }}>⏳</span>}
+          🔧 Tool Operations
         </div>
         
         {/* Display current tool calls */}
@@ -90,9 +90,6 @@ export function CurrentMessage({ currentMessage, currentTokenUsage, currentToolC
       {hasTextContent && (
         <div style={{ fontSize: "14px", lineHeight: "1.4", whiteSpace: "pre-wrap", marginBottom: hasToolCalls ? "10px" : "0" }}>
           {currentMessage.content}
-          {currentMessage.isStreaming && (
-            <span style={{ opacity: 0.5, animation: "blink 1s infinite" }}>▊</span>
-          )}
         </div>
       )}
       
@@ -143,8 +140,7 @@ export function CurrentMessage({ currentMessage, currentTokenUsage, currentToolC
           borderRadius: "4px",
           fontFamily: "monospace"
         }}>
-          📊 {currentTokenUsage.input_tokens} input + {currentTokenUsage.output_tokens} output = {currentTokenUsage.total_tokens} tokens
-          {currentTokenUsage.model_name && ` (${currentTokenUsage.model_name})`}
+          📊 {currentTokenUsage.totalInput} input + {currentTokenUsage.totalOutput} output = {currentTokenUsage.totalTokens} tokens
         </div>
       )}
     </div>
