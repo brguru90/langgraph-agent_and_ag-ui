@@ -6,6 +6,9 @@ aws bedrock list-inference-profiles
 # command to run the Agent server
 `uv run fds-doc`
 
+# swagger
+[http://localhost:8000/docs](http://localhost:8000/docs)
+
 <!-- 
 
 # Dev Run

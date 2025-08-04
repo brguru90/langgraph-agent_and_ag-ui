@@ -17,3 +17,4 @@ run_agent/node_modules
 my-ag-ui-app/node_modules
 ag-ui-sdk
 **/.DS_Store
+run_agent/messages.json

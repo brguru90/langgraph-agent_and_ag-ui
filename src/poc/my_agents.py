@@ -19,6 +19,8 @@ from langmem.short_term import SummarizationNode,summarize_messages,RunningSumma
 from langgraph.func import entrypoint, task
 import uuid
 from langgraph.checkpoint.base import Checkpoint, BaseCheckpointSaver
+from langchain_core.prompts.chat import ChatPromptTemplate, ChatPromptValue
+from langchain_core.messages.utils import get_buffer_string
 
 
 import warnings
@@ -61,6 +63,25 @@ def get_aws_modal():
         max_tokens=max_tokens,         
     )
 
+INITIAL_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("placeholder", "{messages}"),
+        ("user", "Create a summary of the conversation and also summaries the user query at the beginning of summary for above:"),
+    ]
+)
+
+
+EXISTING_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("placeholder", "{messages}"),
+        (
+            "user",
+            "This is summary of the conversation so far: {existing_summary}\n\n"
+            "Extend this summary by taking into account the new messages and also summaries the user query at the beginning of summary above:",
+        ),
+    ]
+)
+
 class SummarizingSaver(BaseCheckpointSaver):
     def __init__(self, inner: BaseCheckpointSaver, summarizer, threshold: int, key="messages"):
         self.inner = inner
@@ -82,33 +103,39 @@ class SummarizingSaver(BaseCheckpointSaver):
 
     def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
         values:ChatState = checkpoint["channel_values"]
-        messages:List[BaseMessage] = values.get(self.channel, [])
+        chat_messages:List[BaseMessage] = values.get(self.channel, [])
         llm = get_aws_modal()
-        if len(messages) > 0:
+        if len(chat_messages) > 0:
             # Ensure all messages have IDs before summarization
-            for msg in messages:
+            for msg in chat_messages:
                 if not hasattr(msg, 'id') or msg.id is None:
                     msg.id = str(uuid.uuid4())
-            
-            result = summarize_messages(
-                messages=messages,
-                running_summary=values.get("summary"),
-                model=llm,
-                max_tokens=max_tokens/1.33,
-                max_tokens_before_summary=max_tokens/3.33,
-                max_summary_tokens=max_tokens/3.34,
-                token_counter=count_tokens_approximately,
-            )
-            values[self.channel] = result.messages
-            for msg in result.messages:
-                if not hasattr(msg, 'id') or msg.id is None:
-                    msg.id = str(uuid.uuid4())
-            if result.running_summary:
-                values["summary"] = result.running_summary
-            elif messages:
-                running_summary_msg="\n++++\n".join([message.content if message.content is str else json.dumps(message.content,default=str) for message in messages])
-                last_summarized_message_id = values["summary"].last_summarized_message_id if values["summary"] else None
-                values["summary"] = RunningSummary(summary=running_summary_msg,summarized_message_ids={uuid.uuid4()},last_summarized_message_id=last_summarized_message_id) 
+            if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
+                chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4())))  # restore summary if message were lost in new checkpoint
+            if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
+                result = summarize_messages(
+                    messages=chat_messages,
+                    running_summary=values.get("summary"),
+                    model=llm,
+                    max_tokens=max_tokens/1.33,
+                    max_tokens_before_summary=max_tokens/3.33,
+                    max_summary_tokens=max_tokens/3.34,
+                    token_counter=count_tokens_approximately,
+                    initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
+                    existing_summary_prompt=EXISTING_SUMMARY_PROMPT
+                )                
+                for msg in result.messages:
+                    if not hasattr(msg, 'id') or msg.id is None:
+                        msg.id = str(uuid.uuid4())
+                values[self.channel] = result.messages
+                if result.messages and isinstance(result.messages[0], messages.SystemMessage):
+                    running_summary_msg = get_buffer_string([result.messages[0]])
+                    summarized_message_ids = set([msg.id for msg in result.messages])
+                    result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
+                elif chat_messages:
+                    running_summary_msg = get_buffer_string(chat_messages)
+                    summarized_message_ids = {uuid.uuid4()}
+                values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
         return self.inner.put(config, checkpoint, metadata, new_versions)
 
     def put_writes(self, config, writes, task_id, task_path=""):
@@ -127,33 +154,40 @@ class SummarizingSaver(BaseCheckpointSaver):
 
     async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
         values:ChatState = checkpoint["channel_values"]
-        messages = values.get(self.channel, [])
+        chat_messages:List[BaseMessage] = values.get(self.channel, [])
         llm = get_aws_modal()
-        if len(messages) > 0:
+        if len(chat_messages) > 0:
             # Ensure all messages have IDs before summarization
-            for msg in messages:
+            for msg in chat_messages:
                 if not hasattr(msg, 'id') or msg.id is None:
                     msg.id = str(uuid.uuid4())
+            if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
+                chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4()))) # restore summary if message were lost in new checkpoint
             
-            result = summarize_messages(
-                messages=messages,
-                running_summary=values.get("summary"),
-                model=llm,
-                max_tokens=max_tokens/1.33,
-                max_tokens_before_summary=max_tokens/3.33,
-                max_summary_tokens=max_tokens/3.34,
-                token_counter=count_tokens_approximately,
-            )
-            values[self.channel] = result.messages
-            for msg in result.messages:
-                if not hasattr(msg, 'id') or msg.id is None:
-                    msg.id = str(uuid.uuid4())
-            if result.running_summary:
-                values["summary"] = result.running_summary
-            elif messages:
-                running_summary_msg="\n++++\n".join([message.content if message.content is str else json.dumps(message.content,default=str) for message in messages])
-                last_summarized_message_id = values["summary"].last_summarized_message_id if values["summary"] else None
-                values["summary"] = RunningSummary(summary=running_summary_msg,summarized_message_ids={uuid.uuid4()},last_summarized_message_id=last_summarized_message_id) 
+            if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
+                result = summarize_messages(
+                    messages=chat_messages,
+                    running_summary=values.get("summary"),
+                    model=llm,
+                    max_tokens=max_tokens/1.33,
+                    max_tokens_before_summary=max_tokens/3.33,
+                    max_summary_tokens=max_tokens/3.34,
+                    token_counter=count_tokens_approximately,
+                    initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
+                    existing_summary_prompt=EXISTING_SUMMARY_PROMPT
+                )                
+                for msg in result.messages:
+                    if not hasattr(msg, 'id') or msg.id is None:
+                        msg.id = str(uuid.uuid4())
+                values[self.channel] = result.messages
+                if result.messages and isinstance(result.messages[0], messages.SystemMessage):
+                    running_summary_msg = get_buffer_string([result.messages[0]])
+                    summarized_message_ids = set([msg.id for msg in result.messages])                    
+                    result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
+                elif chat_messages:
+                    running_summary_msg = get_buffer_string(chat_messages)
+                    summarized_message_ids = {uuid.uuid4()}
+                values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
         return await self.inner.aput(config, checkpoint, metadata, new_versions)
 
     async def aput_writes(self, config, writes, task_id, task_path=""):
@@ -198,21 +232,37 @@ class MyAgent:
         """LLM node - only responsible for calling llm.invoke"""
         for msg in state["messages"]:
             msg.id = msg.id or str(uuid.uuid4()) # Ensure all messages have IDs
-        result = summarize_messages(
-            messages=state["messages"],
-            running_summary=state["summary"],
-            model=self.llm,
-            max_tokens=max_tokens/1.33,
-            max_tokens_before_summary=max_tokens/3.33,
-            max_summary_tokens=max_tokens/3.34,
-            token_counter=count_tokens_approximately,
-        )
-        response = self.llm.invoke(result.messages)
-        # print("---LLM Response: ", response.content,"\n\n")
+        chat_messages= state["messages"]
+        if not state.get("summary") or len(state.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
+            chat_messages = summarize_messages(
+                messages=chat_messages,
+                running_summary=state["summary"],
+                model=self.llm,
+                max_tokens=max_tokens/1.33,
+                max_tokens_before_summary=max_tokens/3.33,
+                max_summary_tokens=max_tokens/3.34,
+                token_counter=count_tokens_approximately,
+                initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
+                existing_summary_prompt=EXISTING_SUMMARY_PROMPT
+            ).messages
+        running_summary_msg=""
+        summarized_message_ids={}
+        if chat_messages and isinstance(chat_messages[0], messages.SystemMessage):
+            running_summary_msg = get_buffer_string([chat_messages[0]])
+            summarized_message_ids = set([msg.id for msg in chat_messages])
+            chat_messages[0]=messages.AIMessage(content=running_summary_msg,id=chat_messages[0].id) # ag-ui don't want first message to be system message
+        for msg in chat_messages:
+            if not hasattr(msg, 'id') or msg.id is None:
+                msg.id = str(uuid.uuid4())
+        try:
+            response = self.llm.invoke(chat_messages)
+        except Exception as e:
+            print(f"Error invoking LLM: {e}")
+            response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
         # Always go to router after LLM response
         return Command(
-            update={'messages': result.messages,"summary": result.running_summary},
+            update={'messages': state["messages"] + [response] ,"summary": RunningSummary(summary=running_summary_msg,summarized_message_ids=summarized_message_ids,last_summarized_message_id=None) if running_summary_msg else state["summary"]},
             goto="route"
         )
 
@@ -307,8 +357,7 @@ class MyAgent:
 
     def on_start(self, run:Run, config:RunnableConfig):
          # just to initialise some state values
-        print("Agent started with config:", config)
-        # print("initial state:", json.dumps(self.get_state(config),default=str))
+        # print("Agent started with config:", config)
         print("initial state:", json.dumps(self.get_state(config),default=str))
         self.get_state(config)
 

@@ -4,17 +4,6 @@ import { randomUUID } from "node:crypto";
 import readline from "node:readline";
 import fs from "node:fs";
 
-// Helper function to map LangGraph message types to AG-UI roles
-function mapLangGraphRoleToAGUI(langGraphType) {
-  const roleMapping = {
-    human: "user",
-    ai: "assistant",
-    tool: "tool",
-    system: "system",
-  };
-  return roleMapping[langGraphType] || "user";
-}
-
 function mapStateMessagesToAGUI(stateMessages) {
     const result = [];
 
@@ -189,17 +178,12 @@ async function runAgent(content, thread_id) {
   console.log("🆔 Thread ID:", agent.threadId);
   console.log("------ Your query:", content);
 
-
-
-
   agent.messages.push({
     id: randomUUID(),
     role: "user",
     content: content,
   });
 
-
-  console.log("messages",agent.messages.map(c=>c.content));
 
   const originalRunId = randomUUID(); // Create runId once and reuse it
 
@@ -212,10 +196,10 @@ async function runAgent(content, thread_id) {
       if (isResume) {
         // For resume calls, temporarily clear messages - let server handle state
         // & anyway without clearing the message the response to interrupt was not working for me
-        // agent.messages = []; // Clear messages for resume
-        const s=await get_state(agent.threadId)
-        console.log("messagess",s)
-        agent.messages=mapStateMessagesToAGUI(s.messages)
+        agent.messages = []; // Clear messages for resume
+        // const s=await get_state(agent.threadId)
+        // console.log("messagess",s.messages)
+        // agent.messages=mapStateMessagesToAGUI(s.messages)
       }
 
       agent
@@ -223,23 +207,24 @@ async function runAgent(content, thread_id) {
           onRunStartedEvent({ event }) {
             console.log(
               "🚀 Run started:",
-              event.runId,
-              Object.keys(event),
-              event.messages?.length,
-              event.messages?.map((m) => m.role),
-              content
+              // event.runId,
+              // Object.keys(event),
+              // event.messages?.length,
+              // event.messages?.map((m) => m.role),
+              // content
             );
           },
           onTextMessageStartEvent(event) {
-            console.log(
-              "🤖 AG-UI assistant: ",
-              Object.keys(event),
-              event.messages?.length,
-              event.messages?.map((m) => m.role),
-              content
-            );
+            // console.log(
+            //   "🤖 AG-UI assistant: ",
+            //   Object.keys(event),
+            //   event.messages?.length,
+            //   event.messages?.map((m) => m.role),
+            //   content
+            // );
           },
           onTextMessageContentEvent({ event }) {
+            // console.log(JSON.stringify(event, null, 2));
             process.stdout.write(event.delta);
           },
           onTextMessageEndEvent(event) {
@@ -279,7 +264,7 @@ async function runAgent(content, thread_id) {
                     command: {
                       resume: userChoice,
                     },
-                    node_name:"route"
+                    // node_name:"route"
                   },
                 };
                 // Recursively handle the resumed run with same agent instance (maintains threadId)
@@ -303,28 +288,28 @@ async function runAgent(content, thread_id) {
             reject(error);
           },
           
-          onStateSnapshotEvent(event) {
-            // entire snapshot
-            console.log(
-              "==onStateSnapshotEvent",
-              Object.keys(event),
-              event.messages.length,
-              event.messages.map((m) => m.role),
-              content
-            );
-            agent.messages = event.messages;
-          },
-          onStateDeltaEvent(event) {
-            // incremental update
-            console.log(
-              "++onStateDeltaEvent",
-              Object.keys(event),
-              event.messages.length,
-              event.messages.map((m) => m.role)
-            );
-            // its not triggering some reason, i will sync from API
-            // https://docs.ag-ui.com/concepts/state
-          },
+          // onStateSnapshotEvent(event) {
+          //   // entire snapshot
+          //   console.log(
+          //     "==onStateSnapshotEvent",
+          //     Object.keys(event),
+          //     event.messages.length,
+          //     event.messages.map((m) => m.role),
+          //     content
+          //   );
+          //   agent.messages = event.messages;
+          // },
+          // onStateDeltaEvent(event) {
+          //   // incremental update
+          //   console.log(
+          //     "++onStateDeltaEvent",
+          //     Object.keys(event),
+          //     event.messages.length,
+          //     event.messages.map((m) => m.role)
+          //   );
+          //   // its not triggering some reason, i will sync from API
+          //   // https://docs.ag-ui.com/concepts/state
+          // },
           onRunFinalized(event) {
             console.log(
               "✅ Run finalized:",
@@ -364,17 +349,14 @@ async function main() {
     "provide me documentation for button component"
   );
   console.log(lastAgent.threadId);
-  fs.writeFileSync("state.json", JSON.stringify(lastAgent));
-  fs.writeFileSync("messages.json", JSON.stringify(lastAgent.messages));
-
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  // fs.writeFileSync("state.json", JSON.stringify(lastAgent));
+  // // fs.writeFileSync("messages.json", JSON.stringify(lastAgent.messages));
   await runAgent(
     "What was my last query",
     lastAgent.threadId,
   );
   console.log("-- Done --");
 
-  // await new Promise((resolve) => setTimeout(resolve, 5000))
 }
 
 await main();

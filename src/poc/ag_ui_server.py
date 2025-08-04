@@ -70,7 +70,7 @@ app.add_middleware(
 def add_missing_ids(config):
     state=my_agent_instance.get_state(config)
     for msg in state["messages"]:
-        msg.id = msg.id or str(uuid.uuid4()) # !!! this is must ag-ui to work
+        msg.id = msg.id or str(uuid.uuid4()) # !!! this is must ag-ui to work, every message must have an id
     my_agent_instance.set_state(config, state)
 
 @app.get("/health")
