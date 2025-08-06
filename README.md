@@ -3,8 +3,14 @@ aws sso login --profile llm-sandbox
 aws bedrock list-inference-profiles 
 ```
 
+# command to run the Agent debug server(LangGraph Studio)
+`uv run fds-dev`
+
 # command to run the Agent server
-`uv run fds-doc`
+`uv run fds-server`
+
+# command to run the Agent cli
+`fds-cli`
 
 # swagger
 [http://localhost:8000/docs](http://localhost:8000/docs)

@@ -385,16 +385,17 @@ class MyAgent:
         last = state["messages"][-1]
         if isinstance(last, dict):
             state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
-        ai_msg = messages.AIMessage(
-            content="",
-            tool_calls=[{
-                "name": "dict_input",
-                "id": str(uuid.uuid4()),
-                "args":{},
-                "type": "tool_call"
-            }]
-        ) 
-        state["messages"].append(ai_msg)   
+        if state.get("thread_id") is None:
+            ai_msg = messages.AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "dict_input",
+                    "id": str(uuid.uuid4()),
+                    "args":{},
+                    "type": "tool_call"
+                }]
+            ) 
+            state["messages"].append(ai_msg)   
         return Command(
             update={"messages": state["messages"], 'tool_call_count': 0,"summary":None,"thread_id": ""},
             goto="initializer_tools"

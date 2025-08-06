@@ -51,17 +51,19 @@ async def run_test_tool_calls(my_agent:MyAgent):
             print("\nExiting...")
             break
 
-async def test_tool_calls():
+def test_tool_calls():
     # New init/close pattern
-    my_agent = MyAgent()
-    await my_agent.init()
-    
-    try:
-        await run_test_tool_calls(my_agent)        
-    finally:
-        print("Closing agent...")
-        await my_agent.close()
-    print('MyAgent exiting...\n')
+    async def run():
+        my_agent = MyAgent()
+        await my_agent.init()
+        
+        try:
+            await run_test_tool_calls(my_agent)        
+        finally:
+            print("Closing agent...")
+            await my_agent.close()
+        print('MyAgent exiting...\n')
+    asyncio.run(run())
 
 # async def test_tool_calls():
 #     # Alternative: still supports async context manager for backward compatibility
@@ -70,6 +72,103 @@ async def test_tool_calls():
 #     print('MyAgent exiting...\n')
 
     
+def debug_tool():
+    """Start the LangGraph development server programmatically"""
+    import os
+    import sys
+    import pathlib
+    
+    try:
+        # Import the actual development server function and configuration
+        from langgraph_cli.cli import dev
+        cwd = os.getcwd()
+        sys.path.append(cwd)
+        config_path = pathlib.Path(f"langgraph.json")
+        # print("config_path",config_path)
+        # dev([ "--config", "langgraph.json","--allow-blocking"], standalone_mode=False)
+
+        # import click
+        
+        # # Create a Click context manually
+        # ctx = click.Context(dev)
+        # ctx.params = {
+        #     'host': '127.0.0.1',
+        #     'port': 2024,
+        #     'no_reload': False,
+        #     'config': 'langgraph.json',
+        #     'n_jobs_per_worker': None,
+        #     'no_browser': False,
+        #     'debug_port': None,
+        #     'wait_for_client': False,
+        #     'studio_url': None,
+        #     'allow_blocking': True,
+        #     'tunnel': False,
+        #     'server_log_level': 'WARNING'
+        # }
+        
+        # print("Calling dev function with Click context...")
+        # with ctx:
+        #     dev.invoke(ctx)
+
+
+        from langgraph_api.cli import run_server
+        import langgraph_cli.config
+        import pathlib
+        
+        # Load and validate the configuration file
+        config_path = pathlib.Path("langgraph.json")
+        config_json = langgraph_cli.config.validate_config_file(config_path)
+        
+        # Check for unsupported features
+        if config_json.get("node_version"):
+            raise Exception(
+                "In-mem server for JS graphs is not supported in this version. Use `npx @langchain/langgraph-cli` instead."
+            )
+
+        # Add current directory and dependencies to Python path
+        cwd = os.getcwd()
+        sys.path.append(cwd)
+        dependencies = config_json.get("dependencies", [])
+        for dep in dependencies:
+            dep_path = pathlib.Path(cwd) / dep
+            if dep_path.is_dir() and dep_path.exists():
+                sys.path.append(str(dep_path))
+
+        # Extract graphs configuration
+        graphs = config_json.get("graphs", {})
+        
+        # Call the development server with the correct parameters
+        run_server(
+            "127.0.0.1",  # host
+            2024,  # port
+            True,  # reload (not no_reload where no_reload=False)
+            graphs,  # graphs
+            n_jobs_per_worker=None,
+            open_browser=True,  # not no_browser where no_browser=False
+            debug_port=None,
+            env=config_json.get("env"),
+            store=config_json.get("store"),
+            wait_for_client=False,
+            auth=config_json.get("auth"),
+            http=config_json.get("http"),
+            ui=config_json.get("ui"),
+            ui_config=config_json.get("ui_config"),
+            studio_url=None,
+            allow_blocking=True,
+            tunnel=False,
+            server_level="WARNING",
+        )
+    # except ImportError as e:
+    #     if "langgraph_api" in str(e):
+    #         print("Required package 'langgraph-api' is not installed.")
+    #         print("Please install it with:")
+    #         print('    pip install -U "langgraph-cli[inmem]"')
+    #     else:
+    #         print(f"Import error: {e}")
+    #     raise
+    except Exception as e:
+        print(f"Error starting development server: {e}")
+        raise
 
 def test_bedrock():
     """Test AWS Bedrock connection"""
