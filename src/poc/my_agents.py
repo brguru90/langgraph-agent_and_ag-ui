@@ -1,4 +1,6 @@
 import asyncio,json
+from typing import Annotated, NotRequired
+from langgraph.prebuilt import InjectedState, create_react_agent
 from typing import TypedDict, Literal,List
 from langchain_aws import ChatBedrockConverse
 from langchain_core.tools import tool
@@ -12,6 +14,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 from langchain_core.runnables.config import RunnableConfig
+from langchain_core.runnables.base import RunnableBindingBase
 from langchain_core.tracers.schemas import Run
 from langchain_core.messages.base import BaseMessage
 from langchain_core.messages.utils import count_tokens_approximately
@@ -21,7 +24,7 @@ import uuid
 from langgraph.checkpoint.base import Checkpoint, BaseCheckpointSaver
 from langchain_core.prompts.chat import ChatPromptTemplate, ChatPromptValue
 from langchain_core.messages.utils import get_buffer_string
-
+import os
 
 import warnings
 warnings.filterwarnings(
@@ -206,6 +209,27 @@ class ChatState(TypedDict):
     thread_id: str 
     summary:RunningSummary | None
 
+
+@tool(return_direct=True)
+def dict_input(state: Annotated[ChatState, InjectedState],config: RunnableConfig):
+    """ This function only exists to handle dictionary input from LangGraph Studio for Debug""" 
+    # print(state)       
+    last_too:messages.AIMessage=state["messages"][-1]
+    state["messages"].append(
+        messages.ToolMessage(
+            id=str(uuid.uuid4()),
+            content="",
+            name="dict_input",
+            tool_call_id=last_too.tool_calls[-1]["id"],
+        )
+    )
+    return Command(
+        update={
+            "messages": state["messages"],
+            "thread_id": config["configurable"]["thread_id"]
+        },
+        goto="llm"
+    )
 class MyAgent:   
     def __init__(self):
         print("__MyAgent__")
@@ -217,6 +241,7 @@ class MyAgent:
         self.tool_node = None
         self.graph = None
         self.max_tool_calls = 2
+        
 
     def get_state(self, config:RunnableConfig) -> ChatState:
         """Get the current state of the agent"""
@@ -355,6 +380,26 @@ class MyAgent:
             )     
 
 
+    
+    def llm_studio(self,state:ChatState)  -> Command[Literal["initializer_tools"]]:
+        last = state["messages"][-1]
+        if isinstance(last, dict):
+            state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
+        ai_msg = messages.AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "dict_input",
+                "id": str(uuid.uuid4()),
+                "args":{},
+                "type": "tool_call"
+            }]
+        ) 
+        state["messages"].append(ai_msg)   
+        return Command(
+            update={"messages": state["messages"], 'tool_call_count': 0,"summary":None,"thread_id": ""},
+            goto="initializer_tools"
+        )
+
     def on_start(self, run:Run, config:RunnableConfig):
          # just to initialise some state values
         # print("Agent started with config:", config)
@@ -398,6 +443,7 @@ class MyAgent:
         
         # Initialize tool node and graph
         self.tool_node = ToolNode(self.tools)
+        self.initializer_tools = ToolNode([dict_input],name="init_tools")
         
         builder = StateGraph(ChatState)
 
@@ -418,7 +464,15 @@ class MyAgent:
         builder.add_node('route', self.route_node)
 
         # Set entry point - all flows start with LLM
-        builder.add_edge(START, 'llm')
+        if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
+            builder.add_node("llm_studio", self.llm_studio)
+            builder.add_node('initializer_tools', self.initializer_tools)
+
+            builder.add_edge(START, 'llm_studio')
+            builder.add_edge("llm_studio", 'initializer_tools')
+            builder.add_edge("initializer_tools", 'llm')
+        else:
+            builder.add_edge(START, 'llm')
         # builder.set_entry_point("summarize")
         # builder.add_edge("llm", "summarize")
         
@@ -429,16 +483,16 @@ class MyAgent:
         
         memory = InMemorySaver()
         wrapped = SummarizingSaver(memory, memory, threshold=5000)
-        self.graph = builder.compile(checkpointer=wrapped)
-        self.graph.get_graph().print_ascii()
+        
+        # Store the base compiled graph for LangGraph Studio API access
+        self._base_graph = builder.compile(checkpointer=wrapped, debug=True, name="fds_agent")
+        self._base_graph.get_graph().print_ascii()
 
-        self.graph = self.graph.with_listeners(
+        # Create the graph with listeners for actual execution
+        self.graph = self._base_graph.with_listeners(
             on_start=self.on_start,
             on_end=lambda run, config: print("-------------------------- Agent run ended --------------------------")
-        )
-
-       
-        
+        )     
 
         
         # Note: Removed print_ascii() as it was causing visualization errors
@@ -500,4 +554,8 @@ class MyAgent:
                     self.client = None
         
         print("Agent cleanup completed")
+    
+    def get_base_graph(self):
+        """Return the base compiled graph without listeners for LangGraph Studio API access"""
+        return self._base_graph
 

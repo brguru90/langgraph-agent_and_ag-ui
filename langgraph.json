@@ -1,0 +1,13 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "fds_agent": {
+      "path": "src/poc/test_studio.py:create_graph",
+      "description": "FDS Documentation Explorer Agent with MCP tools integration"
+    }
+  },
+  "env": ".env"
+}
+    

@@ -92,8 +92,6 @@ def test_bedrock():
         return False
 
 
-
-
 if __name__ == '__main__':
     test_bedrock()
    

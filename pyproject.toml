@@ -22,10 +22,12 @@ dependencies = [
     "ag-ui-langgraph>=0.0.5a1",
     # ag-ui-langgraph is incompatible with copilotkit due to langgraph version conflicts
     "langmem>=0.0.29",
+    "langgraph-cli[inmem]>=0.3.6",
 ]
 
 [project.scripts]
 fds-doc= "poc.main:run"
+fds-dev= "poc.test_agents:create_graph"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
