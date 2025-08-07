@@ -28,7 +28,7 @@ dependencies = [
 [project.scripts]
 fds-server= "poc.main:run"
 fds-cli= "poc.test_agents:test_tool_calls"
-fds-dev= "poc.test_agents:debug_tool"
+fds-dev= "poc.test_agents:debug_tool" # not working (use bash fds_dev.sh instead)
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
