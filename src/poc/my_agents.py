@@ -359,7 +359,15 @@ class ChatState(TypedDict):
 
 
 
-async def query_memories(query: str, config: RunnableConfig, store: BaseStore, get_recent: bool) -> str:
+async def query_memories(
+        query: str, 
+        record_limit: Optional[int] = 10,
+        record_offset: Optional[int] = 0,
+        *,
+        config: RunnableConfig, 
+        store: BaseStore,
+        get_recent: bool
+    ) -> str:
     namespace = (
         "long_term_memories",
         config["configurable"]["user_id"],
@@ -384,11 +392,15 @@ async def query_memories(query: str, config: RunnableConfig, store: BaseStore, g
         query+="Today is "+datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     #     namespace=namespace+(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),)
     # print("\n--------- namespace -------------",namespace)
-    memories = await store.asearch(namespace, query=query, limit=1 if get_recent else 10)
+    memories = await store.asearch(namespace, query=query, limit=record_limit, offset=record_offset)
     formatted = "\n".join(f"[{mem.key}]: {mem.value} (similarity: {mem.score})" for mem in memories)
     if formatted:
         return f"""
 <memories>
+record_limit: {record_limit}
+record_offset: {record_offset}
+
+Here are the relevant memories found for query: `{query}`:
 {formatted}
 </memories>"""
     else:
@@ -459,6 +471,8 @@ async def store_messages(
 @tool
 async def query_memory_id(
     context: str,
+    record_limit: Optional[int] = 10,
+    record_offset: Optional[int] = 0,
     *,
     config: RunnableConfig,
     store: Annotated[BaseStore, InjectedStore],
@@ -472,8 +486,7 @@ async def query_memory_id(
     #     "long_term_memories",
     # )
     # context=store.aget(namespace=namespace, key=memory_id)
-    content=await query_memories(context, config=config, store=store, get_recent=False)
-    return f"Here is the content:\n {str(content)}"
+    return await query_memories(context,record_limit,record_offset, config=config, store=store, get_recent=False)
 
 
 
@@ -481,6 +494,8 @@ async def query_memory_id(
 @tool
 async def relevant_memory(
     context: str,
+    record_limit: Optional[int] =10,
+    record_offset: Optional[int] = 0,
     *,
     config: RunnableConfig,
     store: Annotated[BaseStore, InjectedStore],
@@ -489,12 +504,16 @@ async def relevant_memory(
 
     Args:
         context: last user query or relevant memory for the current context.
+        record_limit: Maximum number of records to return. Defaults to 10.
+        record_offset: Offset for pagination. Defaults to 0.
     """
-    return await query_memories(context, config=config, store=store, get_recent=False)
+    return await query_memories(context,record_limit,record_offset, config=config, store=store, get_recent=False)
         
 @tool
 async def recent_memory(
     context: str,
+    record_limit: Optional[int] =10,
+    record_offset: Optional[int] = 0,
     *,
     config: RunnableConfig,
     store: Annotated[BaseStore, InjectedStore],
@@ -503,8 +522,10 @@ async def recent_memory(
 
     Args:
         context: last user query or relevant memory for the current context.
+        record_limit: Maximum number of records to return. Defaults to 10.
+        record_offset: Offset for pagination. Defaults to 0.
     """
-    return await query_memories(context, config=config, store=store, get_recent=True)
+    return await query_memories(context,record_limit,record_offset, config=config, store=store, get_recent=True)
  
 
 class MyAgent:   
@@ -682,7 +703,7 @@ Then call the store_messages tool with meaningful content and context parameters
                 token_counter=count_tokens_approximately,
                 initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
                 existing_summary_prompt=EXISTING_SUMMARY_PROMPT
-            ).messages
+            ).messages # if context exceeds its summarize initial messages and slices it off
         running_summary_msg=""
         summarized_message_ids={}
         if chat_messages and isinstance(chat_messages[0], messages.SystemMessage): # first message is system message means its summary
