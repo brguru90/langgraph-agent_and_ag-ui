@@ -32,6 +32,7 @@ import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import traceback
 
 
 import warnings
@@ -94,125 +95,125 @@ EXISTING_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-class SummarizingSaver(BaseCheckpointSaver):
-    def __init__(self, inner: BaseCheckpointSaver, summarizer, threshold: int, key="messages"):
-        self.inner = inner
-        self.summarizer = summarizer
-        self.threshold = threshold
-        self.channel = key
+# class SummarizingSaver(BaseCheckpointSaver):
+#     def __init__(self, inner: BaseCheckpointSaver, summarizer, threshold: int, key="messages"):
+#         self.inner = inner
+#         self.summarizer = summarizer
+#         self.threshold = threshold
+#         self.channel = key
 
-    # Delegate config_specs to inner saver
-    @property
-    def config_specs(self):
-        return self.inner.config_specs
+#     # Delegate config_specs to inner saver
+#     @property
+#     def config_specs(self):
+#         return self.inner.config_specs
 
-    # Sync methods - delegate to inner saver
-    def get_tuple(self, config):
-        return self.inner.get_tuple(config)
+#     # Sync methods - delegate to inner saver
+#     def get_tuple(self, config):
+#         return self.inner.get_tuple(config)
 
-    def list(self, config, *, filter=None, before=None, limit=None):
-        return self.inner.list(config, filter=filter, before=before, limit=limit)
+#     def list(self, config, *, filter=None, before=None, limit=None):
+#         return self.inner.list(config, filter=filter, before=before, limit=limit)
 
-    def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
-        print(" ----------- checkpoint put called -------------")
-        values:ChatState = checkpoint["channel_values"]
-        chat_messages:List[BaseMessage] = values.get(self.channel, [])
-        llm = get_aws_modal()
-        if len(chat_messages) > 0:
-            # Ensure all messages have IDs before summarization
-            for msg in chat_messages:
-                if not hasattr(msg, 'id') or msg.id is None:
-                    msg.id = str(uuid.uuid4())
-            if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
-                chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4())))  # restore summary if message were lost in new checkpoint
-            if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
-                result = summarize_messages(
-                    messages=chat_messages,
-                    running_summary=values.get("summary"),
-                    model=llm,
-                    max_tokens=max_tokens/1.33,
-                    max_tokens_before_summary=max_tokens/3.33,
-                    max_summary_tokens=max_tokens/3.34,
-                    token_counter=count_tokens_approximately,
-                    initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
-                    existing_summary_prompt=EXISTING_SUMMARY_PROMPT
-                )                
-                for msg in result.messages:
-                    if not hasattr(msg, 'id') or msg.id is None:
-                        msg.id = str(uuid.uuid4())
-                values[self.channel] = result.messages
-                if result.messages and isinstance(result.messages[0], messages.SystemMessage):
-                    running_summary_msg = get_buffer_string([result.messages[0]])
-                    summarized_message_ids = set([msg.id for msg in result.messages])
-                    result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
-                elif chat_messages:
-                    running_summary_msg = get_buffer_string(chat_messages)
-                    summarized_message_ids = {uuid.uuid4()}
-                values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
-        return self.inner.put(config, checkpoint, metadata, new_versions)
+#     def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
+#         print(" ----------- checkpoint put called -------------")
+#         values:ChatState = checkpoint["channel_values"]
+#         chat_messages:List[BaseMessage] = values.get(self.channel, [])
+#         llm = get_aws_modal()
+#         if len(chat_messages) > 0:
+#             # Ensure all messages have IDs before summarization
+#             for msg in chat_messages:
+#                 if not hasattr(msg, 'id') or msg.id is None:
+#                     msg.id = str(uuid.uuid4())
+#             if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
+#                 chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4())))  # restore summary if message were lost in new checkpoint
+#             if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
+#                 result = summarize_messages(
+#                     messages=chat_messages,
+#                     running_summary=values.get("summary"),
+#                     model=llm,
+#                     max_tokens=max_tokens/1.33,
+#                     max_tokens_before_summary=max_tokens/3.33,
+#                     max_summary_tokens=max_tokens/3.34,
+#                     token_counter=count_tokens_approximately,
+#                     initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
+#                     existing_summary_prompt=EXISTING_SUMMARY_PROMPT
+#                 )                
+#                 for msg in result.messages:
+#                     if not hasattr(msg, 'id') or msg.id is None:
+#                         msg.id = str(uuid.uuid4())
+#                 values[self.channel] = result.messages
+#                 if result.messages and isinstance(result.messages[0], messages.SystemMessage):
+#                     running_summary_msg = get_buffer_string([result.messages[0]])
+#                     summarized_message_ids = set([msg.id for msg in result.messages])
+#                     result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
+#                 elif chat_messages:
+#                     running_summary_msg = get_buffer_string(chat_messages)
+#                     summarized_message_ids = {uuid.uuid4()}
+#                 values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
+#         return self.inner.put(config, checkpoint, metadata, new_versions)
 
-    def put_writes(self, config, writes, task_id, task_path=""):
-        return self.inner.put_writes(config, writes, task_id, task_path)
+#     def put_writes(self, config, writes, task_id, task_path=""):
+#         return self.inner.put_writes(config, writes, task_id, task_path)
 
-    def delete_thread(self, thread_id):
-        return self.inner.delete_thread(thread_id)
+#     def delete_thread(self, thread_id):
+#         return self.inner.delete_thread(thread_id)
 
-    # Async methods - delegate to inner saver
-    async def aget_tuple(self, config):
-        return await self.inner.aget_tuple(config)
+#     # Async methods - delegate to inner saver
+#     async def aget_tuple(self, config):
+#         return await self.inner.aget_tuple(config)
 
-    async def alist(self, config, *, filter=None, before=None, limit=None):
-        async for item in self.inner.alist(config, filter=filter, before=before, limit=limit):
-            yield item
+#     async def alist(self, config, *, filter=None, before=None, limit=None):
+#         async for item in self.inner.alist(config, filter=filter, before=before, limit=limit):
+#             yield item
 
-    async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
-        print(" ----------- checkpoint puta called -------------")
-        values:ChatState = checkpoint["channel_values"]
-        chat_messages:List[BaseMessage] = values.get(self.channel, [])
-        llm = get_aws_modal()
-        if len(chat_messages) > 0:
-            # Ensure all messages have IDs before summarization
-            for msg in chat_messages:
-                if not hasattr(msg, 'id') or msg.id is None:
-                    msg.id = str(uuid.uuid4())
-            if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
-                chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4()))) # restore summary if message were lost in new checkpoint
+#     async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
+#         print(" ----------- checkpoint puta called -------------")
+#         values:ChatState = checkpoint["channel_values"]
+#         chat_messages:List[BaseMessage] = values.get(self.channel, [])
+#         llm = get_aws_modal()
+#         if len(chat_messages) > 0:
+#             # Ensure all messages have IDs before summarization
+#             for msg in chat_messages:
+#                 if not hasattr(msg, 'id') or msg.id is None:
+#                     msg.id = str(uuid.uuid4())
+#             if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
+#                 chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4()))) # restore summary if message were lost in new checkpoint
             
-            if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
-                result = summarize_messages(
-                    messages=chat_messages,
-                    running_summary=values.get("summary"),
-                    model=llm,
-                    max_tokens=max_tokens/1.33,
-                    max_tokens_before_summary=max_tokens/3.33,
-                    max_summary_tokens=max_tokens/3.34,
-                    token_counter=count_tokens_approximately,
-                    initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
-                    existing_summary_prompt=EXISTING_SUMMARY_PROMPT
-                )                
-                for msg in result.messages:
-                    if not hasattr(msg, 'id') or msg.id is None:
-                        msg.id = str(uuid.uuid4())
-                values[self.channel] = result.messages
-                if result.messages and isinstance(result.messages[0], messages.SystemMessage):
-                    running_summary_msg = get_buffer_string([result.messages[0]])
-                    summarized_message_ids = set([msg.id for msg in result.messages])                    
-                    result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
-                elif chat_messages:
-                    running_summary_msg = get_buffer_string(chat_messages)
-                    summarized_message_ids = {uuid.uuid4()}
-                values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
-        return await self.inner.aput(config, checkpoint, metadata, new_versions)
+#             if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
+#                 result = summarize_messages(
+#                     messages=chat_messages,
+#                     running_summary=values.get("summary"),
+#                     model=llm,
+#                     max_tokens=max_tokens/1.33,
+#                     max_tokens_before_summary=max_tokens/3.33,
+#                     max_summary_tokens=max_tokens/3.34,
+#                     token_counter=count_tokens_approximately,
+#                     initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
+#                     existing_summary_prompt=EXISTING_SUMMARY_PROMPT
+#                 )                
+#                 for msg in result.messages:
+#                     if not hasattr(msg, 'id') or msg.id is None:
+#                         msg.id = str(uuid.uuid4())
+#                 values[self.channel] = result.messages
+#                 if result.messages and isinstance(result.messages[0], messages.SystemMessage):
+#                     running_summary_msg = get_buffer_string([result.messages[0]])
+#                     summarized_message_ids = set([msg.id for msg in result.messages])                    
+#                     result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
+#                 elif chat_messages:
+#                     running_summary_msg = get_buffer_string(chat_messages)
+#                     summarized_message_ids = {uuid.uuid4()}
+#                 values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
+#         return await self.inner.aput(config, checkpoint, metadata, new_versions)
 
-    async def aput_writes(self, config, writes, task_id, task_path=""):
-        return await self.inner.aput_writes(config, writes, task_id, task_path)
+#     async def aput_writes(self, config, writes, task_id, task_path=""):
+#         return await self.inner.aput_writes(config, writes, task_id, task_path)
 
-    async def adelete_thread(self, thread_id):
-        return await self.inner.adelete_thread(thread_id)
+#     async def adelete_thread(self, thread_id):
+#         return await self.inner.adelete_thread(thread_id)
 
-    def get_next_version(self, current, channel):
-        print(" ----------- checkpoint get_next_version called -------------")
-        return self.inner.get_next_version(current, channel)
+#     def get_next_version(self, current, channel):
+#         print(" ----------- checkpoint get_next_version called -------------")
+#         return self.inner.get_next_version(current, channel)
 
 
 class AsyncSqliteSaverWrapper(BaseCheckpointSaver):
@@ -356,6 +357,8 @@ class ChatState(TypedDict):
     updated_log_term_memory: bool
 
 
+
+
 async def query_memories(query: str, config: RunnableConfig, store: BaseStore, get_recent: bool) -> str:
     namespace = (
         "long_term_memories",
@@ -393,10 +396,11 @@ async def query_memories(query: str, config: RunnableConfig, store: BaseStore, g
         
 
 
-@tool(description="Store important information from the conversation in long-term memory. ALWAYS analyze the conversation to extract meaningful content and context before calling this tool. Do NOT call with empty parameters.")
+@tool(description="Store important information from the conversation in long-term memory. ALWAYS analyze the conversation to extract meaningful content and context before calling this tool. Do NOT call with empty parameters and don't call it if enough information is not available.")
 async def store_messages(
     content: str,
     context: str,
+    user_queries: List[str],
     *,
     memory_id: Optional[str] = None,
     config: RunnableConfig,
@@ -406,7 +410,7 @@ async def store_messages(
 
     IMPORTANT: Before calling this tool, you MUST:
     1. Analyze the recent conversation messages
-    2. Extract key information, decisions, or insights
+    2. Extract key user queries, information, decisions, or insights
     3. Provide meaningful content and context parameters
     4. Do NOT call with empty or generic parameters
 
@@ -419,6 +423,7 @@ async def store_messages(
             "User expressed interest in learning about French."
         context: Additional context for the memory. For example:
             "This was mentioned while discussing career options in Europe."
+        user_query: combine all the user queries for the conversation which you want to store in the memory.
         memory_id: ONLY PROVIDE IF UPDATING AN EXISTING MEMORY.
         The memory to overwrite.
     """
@@ -446,7 +451,7 @@ async def store_messages(
     await store.aput(
         namespace=namespace,
         key=key,
-        value={"content": content, "context": context,"last_updated":datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
+        value={"content": content, "context": context,"user_queries":user_queries,"last_updated":datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
     )
     return f"Summarized with {key}"
 
@@ -522,6 +527,43 @@ class MyAgent:
             self.graph.update_state(config, values={'messages': [],"tool_call_count": 0,"thread_id": config["configurable"]["thread_id"],"summary":None},as_node="tools")
         return self.graph.get_state(config).values
 
+        
+    def filter_visible_messages(self,messages: List[BaseMessage]) -> List[BaseMessage]:
+        """Filter out messages marked as hidden from chat display"""
+        visible_messages = []
+        for msg in messages:
+            # Check if message should be hidden
+            additional_kwargs = getattr(msg, 'additional_kwargs', {})
+            if not additional_kwargs.get('hidden_from_chat', False):
+                visible_messages.append(msg)
+        return visible_messages
+
+
+    def mark_tool_messages_as_hidden(self,messages: List[BaseMessage], tool_names: set) -> List[BaseMessage]:
+        """Mark tool call and tool result messages as hidden for specific tools"""
+        processed_messages = []
+        for msg in messages:
+            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                # Check if any tool call is for memory-related tools
+                should_hide = any(tool_call.get('name') in tool_names for tool_call in msg.tool_calls)
+                if should_hide:
+                    msg.additional_kwargs = msg.additional_kwargs or {}
+                    msg.additional_kwargs.update({
+                        'hidden_from_chat': True, 
+                        'message_type': 'tool_call',
+                        'hidden_tools': [tc.get('name') for tc in msg.tool_calls if tc.get('name') in tool_names]
+                    })
+            elif hasattr(msg, 'name') and msg.name in tool_names:
+                # Tool result message
+                msg.additional_kwargs = msg.additional_kwargs or {}
+                msg.additional_kwargs.update({
+                    'hidden_from_chat': True, 
+                    'message_type': 'tool_result',
+                    'tool_name': msg.name
+                })
+            processed_messages.append(msg)
+        return processed_messages
+
     def set_state(self, config:RunnableConfig, new_state:ChatState,as_node:str='tools'):
         """Set the current state of the agent"""
         self.graph.update_state(config, values=new_state,as_node=as_node)
@@ -532,15 +574,31 @@ class MyAgent:
         chat_messages=state["messages"]
         if override_decision or count_tokens_approximately(chat_messages) > max_tokens:
             # Instead of calling with empty args, let the LLM analyze and decide
-            analysis_prompt = messages.HumanMessage(
-                content="""The conversation has reached a point where important information should be stored in long-term memory. 
+            msg="""The conversation has reached a point where important information should be stored in long-term memory. 
 
 Please analyze the recent conversation and identify:
 1. Key information, decisions, or insights that should be remembered
 2. The specific context in which this information was discussed
+3. Provide memory_id for the conversation if its relevant to update existing memory with the additional information, if available. But make sure you combine both the existing memory and new information to create a meaningful memory and don't loose any information.
 
-Then call the store_messages tool with meaningful content and context parameters. Do NOT call it with empty or generic parameters.""",
-                id=str(uuid.uuid4())
+Then call the store_messages tool with meaningful content and context parameters. Do NOT call it with empty or generic parameters."""
+            analysis_prompt = messages.AIMessage(
+                content=[{
+                    "type": "text",
+                    "text": msg,
+                    "index": 0
+                }],
+                id=str(uuid.uuid4()),
+                additional_kwargs={"hidden_from_chat": True, "message_type": "memory_trigger"},
+                usage_metadata={
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "input_token_details": {
+                        "cache_creation": 0,
+                        "cache_read": 0
+                    }
+                }
             )
             state["messages"].append(analysis_prompt)
             return True
@@ -589,8 +647,6 @@ Then call the store_messages tool with meaningful content and context parameters
     
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
         """Handle any cleanup before conversation ends"""
-        # You can add any cleanup logic here if needed
-        print("Conversation is ending, cleaning up resources...")
 
         if not state.get("updated_log_term_memory",False) and self.decide_store_messages(state, config, store,True):
             state["updated_log_term_memory"] = True
@@ -641,7 +697,7 @@ Then call the store_messages tool with meaningful content and context parameters
         try:
             response = self.llm.invoke(chat_messages)
         except Exception as e:
-            print(f"Error invoking LLM: {e}")
+            print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
         # Always go to router after LLM response
@@ -669,11 +725,18 @@ Then call the store_messages tool with meaningful content and context parameters
         )
         result = await self.tool_node.ainvoke(state)
 
+        # Mark memory-related tool messages as hidden
+        memory_tool_names = {'store_messages', 'relevant_memory', 'recent_memory', 'query_memory_id'}
+        result['messages'] = self.mark_tool_messages_as_hidden(result['messages'], memory_tool_names)
+        
+        # Also mark the AI message that made the tool calls as hidden if it called memory tools
+        updated_state_messages = self.mark_tool_messages_as_hidden(state['messages'], memory_tool_names)
+
         # print("---tools_node: ",result,"\n\n")
         # Always go to router after tools execution
         return Command(
             update={
-                'messages': state['messages'] + result['messages'],
+                'messages': updated_state_messages + result['messages'],
                 'tool_call_count': state['tool_call_count']+1
             },
             goto="route"
