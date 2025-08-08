@@ -184,6 +184,10 @@ async function runAgent(content, thread_id) {
     content: content,
   });
 
+  agent.messages.forEach((msg) => {
+    console.log("message==> ",msg.role,msg.content)
+  })
+
 
   const originalRunId = randomUUID(); // Create runId once and reuse it
 

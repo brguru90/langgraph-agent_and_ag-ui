@@ -1,6 +1,6 @@
 import asyncio,json
-from typing import Annotated, NotRequired
-from langgraph.prebuilt import InjectedState, create_react_agent
+from typing import Annotated, NotRequired,Dict,Optional,Any
+from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from typing import TypedDict, Literal,List
 from langchain_aws import ChatBedrockConverse
 from langchain_core.tools import tool
@@ -24,7 +24,15 @@ import uuid
 from langgraph.checkpoint.base import Checkpoint, BaseCheckpointSaver
 from langchain_core.prompts.chat import ChatPromptTemplate, ChatPromptValue
 from langchain_core.messages.utils import get_buffer_string
+from langgraph.store.base import BaseStore,SearchItem
+from langgraph.store.sqlite import SqliteStore
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 import os
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+
 
 import warnings
 warnings.filterwarnings(
@@ -56,6 +64,7 @@ warnings.filterwarnings(
 # claude-sonnet-4 -> supports upto 200k tokens
 
 max_tokens = 65536
+END_CONV="end_conv"
 
 def get_aws_modal():
     return ChatBedrockConverse(
@@ -105,6 +114,7 @@ class SummarizingSaver(BaseCheckpointSaver):
         return self.inner.list(config, filter=filter, before=before, limit=limit)
 
     def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
+        print(" ----------- checkpoint put called -------------")
         values:ChatState = checkpoint["channel_values"]
         chat_messages:List[BaseMessage] = values.get(self.channel, [])
         llm = get_aws_modal()
@@ -156,6 +166,7 @@ class SummarizingSaver(BaseCheckpointSaver):
             yield item
 
     async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
+        print(" ----------- checkpoint puta called -------------")
         values:ChatState = checkpoint["channel_values"]
         chat_messages:List[BaseMessage] = values.get(self.channel, [])
         llm = get_aws_modal()
@@ -200,7 +211,140 @@ class SummarizingSaver(BaseCheckpointSaver):
         return await self.inner.adelete_thread(thread_id)
 
     def get_next_version(self, current, channel):
+        print(" ----------- checkpoint get_next_version called -------------")
         return self.inner.get_next_version(current, channel)
+
+
+class AsyncSqliteSaverWrapper(BaseCheckpointSaver):
+    """
+    A wrapper around SqliteSaver that provides full async support while maintaining
+    sync compatibility. This wrapper uses a thread pool to execute sync operations
+    asynchronously without blocking the event loop.
+    """
+    
+    def __init__(self, sqlite_saver: SqliteSaver, max_workers: int = 4):
+        """
+        Initialize the async wrapper.
+        
+        Args:
+            sqlite_saver: The SqliteSaver instance to wrap
+            max_workers: Maximum number of threads in the thread pool
+        """
+        self.sqlite_saver = sqlite_saver
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._loop = None
+    
+    def _ensure_loop(self):
+        """Ensure we have access to the current event loop"""
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+    
+    # Delegate config_specs to inner saver
+    @property
+    def config_specs(self):
+        return self.sqlite_saver.config_specs
+    
+    # Sync methods - delegate directly to SqliteSaver
+    def get_tuple(self, config):
+        return self.sqlite_saver.get_tuple(config)
+    
+    def list(self, config, *, filter=None, before=None, limit=None):
+        return self.sqlite_saver.list(config, filter=filter, before=before, limit=limit)
+    
+    def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
+        return self.sqlite_saver.put(config, checkpoint, metadata, new_versions)
+    
+    def put_writes(self, config, writes, task_id, task_path=""):
+        return self.sqlite_saver.put_writes(config, writes, task_id, task_path)
+    
+    def delete_thread(self, thread_id):
+        return self.sqlite_saver.delete_thread(thread_id)
+    
+    def get_next_version(self, current, channel):
+        return self.sqlite_saver.get_next_version(current, channel)
+    
+    # Async methods - run sync methods in thread pool
+    async def aget_tuple(self, config):
+        """Async version of get_tuple"""
+        self._ensure_loop()
+        if self._loop:
+            return await self._loop.run_in_executor(
+                self._executor, 
+                self.sqlite_saver.get_tuple, 
+                config
+            )
+        else:
+            # Fallback to sync if no event loop
+            return self.sqlite_saver.get_tuple(config)
+    
+    async def alist(self, config, *, filter=None, before=None, limit=None):
+        """Async version of list"""
+        self._ensure_loop()
+        if self._loop:
+            # Since list returns a generator, we need to handle it specially
+            items = await self._loop.run_in_executor(
+                self._executor,
+                lambda: list(self.sqlite_saver.list(config, filter=filter, before=before, limit=limit))
+            )
+            for item in items:
+                yield item
+        else:
+            # Fallback to sync if no event loop
+            for item in self.sqlite_saver.list(config, filter=filter, before=before, limit=limit):
+                yield item
+    
+    async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
+        """Async version of put"""
+        self._ensure_loop()
+        if self._loop:
+            return await self._loop.run_in_executor(
+                self._executor,
+                self.sqlite_saver.put,
+                config, checkpoint, metadata, new_versions
+            )
+        else:
+            # Fallback to sync if no event loop
+            return self.sqlite_saver.put(config, checkpoint, metadata, new_versions)
+    
+    async def aput_writes(self, config, writes, task_id, task_path=""):
+        """Async version of put_writes"""
+        self._ensure_loop()
+        if self._loop:
+            return await self._loop.run_in_executor(
+                self._executor,
+                self.sqlite_saver.put_writes,
+                config, writes, task_id, task_path
+            )
+        else:
+            # Fallback to sync if no event loop
+            return self.sqlite_saver.put_writes(config, writes, task_id, task_path)
+    
+    async def adelete_thread(self, thread_id):
+        """Async version of delete_thread"""
+        self._ensure_loop()
+        if self._loop:
+            return await self._loop.run_in_executor(
+                self._executor,
+                self.sqlite_saver.delete_thread,
+                thread_id
+            )
+        else:
+            # Fallback to sync if no event loop
+            return self.sqlite_saver.delete_thread(thread_id)
+    
+    def shutdown(self):
+        """Shutdown the thread pool executor"""
+        if self._executor:
+            self._executor.shutdown(wait=True)
+    
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        try:
+            self.shutdown()
+        except:
+            pass
 
 
 class ChatState(TypedDict):
@@ -208,28 +352,156 @@ class ChatState(TypedDict):
     tool_call_count: int
     thread_id: str 
     summary:RunningSummary | None
+    last_store_id: str | None
+    updated_log_term_memory: bool
 
 
-@tool(return_direct=True)
-def dict_input(state: Annotated[ChatState, InjectedState],config: RunnableConfig):
-    """ This function only exists to handle dictionary input from LangGraph Studio for Debug""" 
-    # print(state)       
-    last_too:messages.AIMessage=state["messages"][-1]
-    state["messages"].append(
-        messages.ToolMessage(
-            id=str(uuid.uuid4()),
-            content="",
-            name="dict_input",
-            tool_call_id=last_too.tool_calls[-1]["id"],
+async def query_memories(query: str, config: RunnableConfig, store: BaseStore, get_recent: bool) -> str:
+    namespace = (
+        "long_term_memories",
+        config["configurable"]["user_id"],
+        config["configurable"]["thread_id"],
+    )
+    group_id=config["configurable"].get("group_id",None)
+    if group_id:
+        namespace=namespace+(group_id,)
+
+    if config["configurable"].get("context_scope", None) == "thread":
+        namespace = (
+            "long_term_memories",
+            config["configurable"]["user_id"],
+            config["configurable"]["thread_id"],
         )
+    elif config["configurable"].get("context_scope", None) == "user":
+        namespace = (
+            "long_term_memories",
+            config["configurable"]["user_id"],
+        )
+    if get_recent:
+        query+="Today is "+datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    #     namespace=namespace+(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),)
+    # print("\n--------- namespace -------------",namespace)
+    memories = await store.asearch(namespace, query=query, limit=1 if get_recent else 10)
+    formatted = "\n".join(f"[{mem.key}]: {mem.value} (similarity: {mem.score})" for mem in memories)
+    if formatted:
+        return f"""
+<memories>
+{formatted}
+</memories>"""
+    else:
+        return f"""No relevant memories found for query: `{query}`"""
+        
+
+
+@tool(description="Store important information from the conversation in long-term memory. ALWAYS analyze the conversation to extract meaningful content and context before calling this tool. Do NOT call with empty parameters.")
+async def store_messages(
+    content: str,
+    context: str,
+    *,
+    memory_id: Optional[str] = None,
+    config: RunnableConfig,
+    store: Annotated[BaseStore, InjectedStore],
+) -> str:
+    """Stores important information from the conversation in long-term memory.
+
+    IMPORTANT: Before calling this tool, you MUST:
+    1. Analyze the recent conversation messages
+    2. Extract key information, decisions, or insights
+    3. Provide meaningful content and context parameters
+    4. Do NOT call with empty or generic parameters
+
+    If a memory conflicts with an existing one, then just UPDATE the
+    existing one by passing in memory_id - don't create two memories
+    that are the same. If the user corrects a memory, UPDATE it.
+
+    Args:
+        content: The main content of the memory. For example:
+            "User expressed interest in learning about French."
+        context: Additional context for the memory. For example:
+            "This was mentioned while discussing career options in Europe."
+        memory_id: ONLY PROVIDE IF UPDATING AN EXISTING MEMORY.
+        The memory to overwrite.
+    """
+    # Validate parameters
+    if not content or content.strip() == "" or len(content.strip()) < 10:
+        return "Error: Content parameter must be meaningful and at least 10 characters long. Please analyze the conversation and provide specific information to store."
+    
+    if not context or context.strip() == "" or len(context.strip()) < 10:
+        return "Error: Context parameter must be meaningful and at least 10 characters long. Please provide specific situational context for this memory."
+    
+    # Check for generic/placeholder content
+    generic_phrases = ["conversation summary", "general conversation", "user input", "discussion"]
+    if any(phrase in content.lower() for phrase in generic_phrases):
+        return f"Error: Content appears to be generic ('{content}'). Please provide specific, meaningful information from the conversation."
+    
+    key = memory_id or str(uuid.uuid4())
+    group_id=config["configurable"].get("group_id",None)
+    namespace = (
+        "long_term_memories",
+        config["configurable"]["user_id"],
+        config["configurable"]["thread_id"],
     )
-    return Command(
-        update={
-            "messages": state["messages"],
-            "thread_id": config["configurable"]["thread_id"]
-        },
-        goto="llm"
+    if group_id:
+        namespace=namespace+(group_id,)
+    await store.aput(
+        namespace=namespace,
+        key=key,
+        value={"content": content, "context": context,"last_updated":datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
     )
+    return f"Summarized with {key}"
+
+
+@tool
+async def query_memory_id(
+    context: str,
+    *,
+    config: RunnableConfig,
+    store: Annotated[BaseStore, InjectedStore],
+) -> str:
+    """Query memory id by its context.
+
+    Args:
+        context: Provide the relevant context to get corresponding memory id/key
+    """
+    # namespace = (
+    #     "long_term_memories",
+    # )
+    # context=store.aget(namespace=namespace, key=memory_id)
+    content=await query_memories(context, config=config, store=store, get_recent=False)
+    return f"Here is the content:\n {str(content)}"
+
+
+
+
+@tool
+async def relevant_memory(
+    context: str,
+    *,
+    config: RunnableConfig,
+    store: Annotated[BaseStore, InjectedStore],
+) -> str:
+    """Provide Relevant memories from long term memory.
+
+    Args:
+        context: last user query or relevant memory for the current context.
+    """
+    return await query_memories(context, config=config, store=store, get_recent=False)
+        
+@tool
+async def recent_memory(
+    context: str,
+    *,
+    config: RunnableConfig,
+    store: Annotated[BaseStore, InjectedStore],
+) -> str:
+    """Provide recent memories from long term memory.
+
+    Args:
+        context: last user query or relevant memory for the current context.
+    """
+    return await query_memories(context, config=config, store=store, get_recent=True)
+ 
+
 class MyAgent:   
     def __init__(self):
         print("__MyAgent__")
@@ -240,12 +512,13 @@ class MyAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.max_tool_calls = 2
-        
+        self.max_tool_calls = 5
+        self.store = None
 
     def get_state(self, config:RunnableConfig) -> ChatState:
         """Get the current state of the agent"""
         if not self.graph.get_state(config).values:
+            print("\n\n~~~~~~~~~~~~ Init ~~~~~~~~~~~~~~\n\n")
             self.graph.update_state(config, values={'messages': [],"tool_call_count": 0,"thread_id": config["configurable"]["thread_id"],"summary":None},as_node="tools")
         return self.graph.get_state(config).values
 
@@ -253,8 +526,92 @@ class MyAgent:
         """Set the current state of the agent"""
         self.graph.update_state(config, values=new_state,as_node=as_node)
 
-    def llm_node(self, state:ChatState) -> Command[Literal["route"]]:
+
+    def decide_store_messages(self,state:ChatState,config: RunnableConfig, store: BaseStore,override_decision:bool=False) -> bool: 
+        # additional_kwargs       
+        chat_messages=state["messages"]
+        if override_decision or count_tokens_approximately(chat_messages) > max_tokens:
+            # Instead of calling with empty args, let the LLM analyze and decide
+            analysis_prompt = messages.HumanMessage(
+                content="""The conversation has reached a point where important information should be stored in long-term memory. 
+
+Please analyze the recent conversation and identify:
+1. Key information, decisions, or insights that should be remembered
+2. The specific context in which this information was discussed
+
+Then call the store_messages tool with meaningful content and context parameters. Do NOT call it with empty or generic parameters.""",
+                id=str(uuid.uuid4())
+            )
+            state["messages"].append(analysis_prompt)
+            return True
+        return False
+            
+
+    def init_conversation(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
+        """Initialize the conversation state"""
+        # Initialize messages if not already set
+
+        print("\n--state--",state)
+
+        if not state.get("messages"):
+            state["messages"] = []
+            
+        def llm_studio_fix():
+            if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
+                last = state["messages"][-1]
+                if isinstance(last, dict):
+                    state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
+
+        llm_studio_fix()        
+
+
+        base_graph_states = list(self._base_graph.get_state_history(config))
+        graph_states = list(self.graph.get_state_history(config))
+        print(f"\n\n ----- [[ checkpoints ]] -----",config["configurable"]["thread_id"])
+        print(f"\n\n ----- base_graph_states({len(base_graph_states)}) -----")
+        for state in base_graph_states:
+            print(f"Checkpoint: {state}\n")        
+        print(f"\n\n ----- graph_states({len(graph_states)}) -----")
+        for state in graph_states:
+            print(f"Checkpoint: {state}\n")
+
+        # Return command to route to LLM node
+        return Command(
+            update={
+                'messages': state["messages"],
+                'tool_call_count': 0,
+                'thread_id': config["configurable"]["thread_id"],
+                "updated_log_term_memory":False,
+                "summary": state.get("summary",None)
+            },
+            goto="llm"
+        )
+    
+    async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
+        """Handle any cleanup before conversation ends"""
+        # You can add any cleanup logic here if needed
+        print("Conversation is ending, cleaning up resources...")
+
+        if not state.get("updated_log_term_memory",False) and self.decide_store_messages(state, config, store,True):
+            state["updated_log_term_memory"] = True
+            return Command(
+                update=state,
+                goto="llm"
+            )
+
+        if os.environ.get("USING_LLM_STUDIO", "true").lower() == "true":
+            self.sql_lite_conn.commit() 
+            self.store_conn.commit()  
+        
+        # Return command to route to END node
+        return Command(
+            update={},
+            goto=END
+        )
+
+    async def llm_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
         """LLM node - only responsible for calling llm.invoke"""
+
         for msg in state["messages"]:
             msg.id = msg.id or str(uuid.uuid4()) # Ensure all messages have IDs
         chat_messages= state["messages"]
@@ -272,7 +629,9 @@ class MyAgent:
             ).messages
         running_summary_msg=""
         summarized_message_ids={}
-        if chat_messages and isinstance(chat_messages[0], messages.SystemMessage):
+        if chat_messages and isinstance(chat_messages[0], messages.SystemMessage): # first message is system message means its summary
+            if self.decide_store_messages(state, config, store):
+                chat_messages.append(state["messages"][-1])
             running_summary_msg = get_buffer_string([chat_messages[0]])
             summarized_message_ids = set([msg.id for msg in chat_messages])
             chat_messages[0]=messages.AIMessage(content=running_summary_msg,id=chat_messages[0].id) # ag-ui don't want first message to be system message
@@ -286,12 +645,19 @@ class MyAgent:
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
         # Always go to router after LLM response
+
+
         return Command(
-            update={'messages': state["messages"] + [response] ,"summary": RunningSummary(summary=running_summary_msg,summarized_message_ids=summarized_message_ids,last_summarized_message_id=None) if running_summary_msg else state["summary"]},
+            update={
+                'messages': chat_messages + [response],
+                'tool_call_count': state['tool_call_count'],
+                'thread_id': state['thread_id'],
+                "summary": RunningSummary(summary=running_summary_msg,summarized_message_ids=summarized_message_ids,last_summarized_message_id=None) if running_summary_msg else state["summary"]
+            },
             goto="route"
         )
 
-    async def tools_node(self, state:ChatState) -> Command[Literal["route"]]:
+    async def tools_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
         """Tools node - only responsible for calling tool_node.ainvoke"""    
         ai_msg:messages.AIMessage=state["messages"][-1]
         print(
@@ -313,7 +679,7 @@ class MyAgent:
             goto="route"
         )
 
-    def route_node(self, state:ChatState) -> Command[Literal["tools", "llm"]]:
+    def route_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm","end_conv"]]:
         """Route node - handles all routing logic using Command pattern"""
         # !!! Command pattern allows us to define custom logic and state can be update during routing
         
@@ -331,7 +697,8 @@ class MyAgent:
             if user_answer == 'no':
                 # Explicitly end the graph
                 return Command(
-                    update={}  # No state update needed
+                    update={},  # No state update needed
+                    goto=END_CONV  # End the conversation
                 )
             elif user_answer == 'yes':
                 # Reset tool count and continue with tools if LLM wants to use them
@@ -376,35 +743,12 @@ class MyAgent:
         else:
             # LLM finished without tool calls - end execution
             return Command(
-                update={}
+                update={},
+                goto=END_CONV
             )     
 
-
-    
-    def llm_studio(self,state:ChatState)  -> Command[Literal["initializer_tools"]]:
-        last = state["messages"][-1]
-        if isinstance(last, dict):
-            state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
-        if state.get("thread_id") is None:
-            ai_msg = messages.AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": "dict_input",
-                    "id": str(uuid.uuid4()),
-                    "args":{},
-                    "type": "tool_call"
-                }]
-            ) 
-            state["messages"].append(ai_msg)   
-        return Command(
-            update={"messages": state["messages"], 'tool_call_count': 0,"summary":None,"thread_id": ""},
-            goto="initializer_tools"
-        )
-
     def on_start(self, run:Run, config:RunnableConfig):
-         # just to initialise some state values
-        # print("Agent started with config:", config)
-        print("initial state:", json.dumps(self.get_state(config),default=str))
+        print("\n\ninitial state:", json.dumps(self.get_state(config),default=str))
         self.get_state(config)
 
     async def init(self):
@@ -419,10 +763,6 @@ class MyAgent:
                     "command": "uvx",
                     "args": ["fds-mcp-server"],
                     "transport": "stdio",
-                    # "env": {
-                    #     **os.environ,
-                    #     "PYTHONUNBUFFERED": "1",
-                    # }
                 }
             }
         )
@@ -439,55 +779,46 @@ class MyAgent:
         else:
             print("No tools loaded, returning...")
             return
-
-        self.llm = self.llm.bind_tools(self.tools)
         
-        # Initialize tool node and graph
+        self.tools.append(store_messages) 
+        self.tools.append(relevant_memory) 
+        self.tools.append(recent_memory)
+        self.tools.append(query_memory_id) 
+
+        self.llm = self.llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
-        self.initializer_tools = ToolNode([dict_input],name="init_tools")
         
         builder = StateGraph(ChatState)
-
-
-        # summarizer= SummarizationNode(
-        #     token_counter=count_tokens_approximately,
-        #     model=self.llm,
-        #     max_tokens=2000,
-        #     max_summary_tokens=1000,
-        #     output_messages_key="messages",
-        # )
-
-
-        # Add nodes - now with separated routing logic
-        # builder.add_node("summarize", summarizer)
+        builder.add_node('start_conv', self.init_conversation)
         builder.add_node('llm', self.llm_node)
         builder.add_node('tools', self.tools_node)
         builder.add_node('route', self.route_node)
+        builder.add_node('end_conv', self.before_conversation_end)
 
-        # Set entry point - all flows start with LLM
+        # builder.add_edge(START, 'start_conv')
+        builder.set_entry_point('start_conv')
+        builder.add_edge('start_conv', 'llm')
+        builder.add_edge('end_conv', END)
+            
+        
+        # memory = InMemorySaver()
+        # wrapped = SummarizingSaver(memory, memory, threshold=5000)        
+        # self._base_graph = builder.compile(checkpointer=wrapped, debug=False, name="fds_agent")
+        os.makedirs("data", exist_ok=True)
+        sql_file= "data/graph_data.sqlite"
         if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
-            builder.add_node("llm_studio", self.llm_studio)
-            builder.add_node('initializer_tools', self.initializer_tools)
+            sql_file= "data/graph_studio_data.sqlite"
 
-            builder.add_edge(START, 'llm_studio')
-            builder.add_edge("llm_studio", 'initializer_tools')
-            builder.add_edge("initializer_tools", 'llm')
-        else:
-            builder.add_edge(START, 'llm')
-        # builder.set_entry_point("summarize")
-        # builder.add_edge("llm", "summarize")
+        self.sql_lite_conn = sqlite3.connect(sql_file,check_same_thread=False)
+        sqlite_saver = SqliteSaver(self.sql_lite_conn)
+        self.checkpointer = AsyncSqliteSaverWrapper(sqlite_saver, max_workers=4)
         
-        # No conditional edges needed! The Command pattern handles all routing
-        # The nodes themselves decide where to go next using Command.goto
-
-
+        # Initialize SQLite store for long-term memory
+        store_sql_file = sql_file.replace("graph_data.sqlite", "store_data.sqlite").replace("graph_studio_data.sqlite", "store_studio_data.sqlite")
+        self.store_conn = sqlite3.connect(store_sql_file, check_same_thread=False)
+        self.store = SqliteStore(self.store_conn)
         
-        memory = InMemorySaver()
-        wrapped = SummarizingSaver(memory, memory, threshold=5000)
-        
-        # Store the base compiled graph for LangGraph Studio API access
-        self._base_graph = builder.compile(checkpointer=wrapped, debug=True, name="fds_agent")
-        self._base_graph.get_graph().print_ascii()
+        self._base_graph = builder.compile(checkpointer=self.checkpointer, store=self.store, debug=False, name="fds_agent")
 
         # Create the graph with listeners for actual execution
         self.graph = self._base_graph.with_listeners(
@@ -495,20 +826,14 @@ class MyAgent:
             on_end=lambda run, config: print("-------------------------- Agent run ended --------------------------")
         )     
 
-        
-        # Note: Removed print_ascii() as it was causing visualization errors
-        print("✅ Graph compiled successfully with Command pattern")
-        print("📊 Graph structure: START -> llm -> route -> [tools | END]")
-        print("🔧 Using Command pattern for dynamic routing with separated concerns:")
-        print("   - llm_node: Only handles LLM invocation")
-        print("   - tools_node: Only handles tool invocation") 
-        print("   - route_node: Handles all routing logic and human-in-the-loop")
+        self.graph.get_graph().print_ascii()
         
         # async for event in self.graph.astream(self.state, stream_mode=["updates","messages"]):
         #     pass
 
     async def close(self):
         """Clean up resources and close connections"""
+        print("Closing agent resources...")
         await self.__aexit__(None, None, None)
 
     # Keep the async context manager methods for backward compatibility
@@ -521,10 +846,25 @@ class MyAgent:
         import asyncio
         import warnings
 
+
         
         # Suppress warnings during cleanup
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+
+            if self.sql_lite_conn:
+                try:
+                    print("Closing SqlLite Conn...")
+                    self.sql_lite_conn.close()
+                except Exception as e:
+                    print(f"Error closing SQLite connection: {e}")
+            
+            if self.store_conn:
+                try:
+                    print("Closing Store SqlLite Conn...")
+                    self.store_conn.close()
+                except Exception as e:
+                    print(f"Error closing store SQLite connection: {e}")
             
             # Close client session first
             if self.client_session_ctx:

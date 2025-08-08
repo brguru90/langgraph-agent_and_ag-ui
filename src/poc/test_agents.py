@@ -6,9 +6,11 @@ from langchain_core import messages
 import uuid
 
 async def run_test_tool_calls(my_agent:MyAgent):
-    thread_id = str(uuid.uuid4())
+    # thread_id = str(uuid.uuid4())
+    thread_id="1517e275-850e-426a-970b-da3bb41a30d7"
     config = {
         "configurable": {"thread_id": thread_id},
+        "run_id":str(uuid.uuid4()),
         "recursion_limit": 25  # Increase recursion limit to prevent premature termination
     }
     interrupted=False
@@ -16,7 +18,7 @@ async def run_test_tool_calls(my_agent:MyAgent):
     print('Type an instruction or "quit".\n')
     while True:
         try:
-            user_message = input('> ')
+            user_message = input('(type quit to exit)> ' if interrupted else '> ')
             output=""
 
             if user_message.lower() == 'quit':
