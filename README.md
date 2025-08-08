@@ -4,7 +4,7 @@ aws bedrock list-inference-profiles
 ```
 
 # command to run the Agent debug server(LangGraph Studio)
-`uv run fds-dev`
+`bash fds_dev.sh`
 
 # command to run the Agent server
 `uv run fds-server`
@@ -14,6 +14,9 @@ aws bedrock list-inference-profiles
 
 # swagger
 [http://localhost:8000/docs](http://localhost:8000/docs)
+
+# React ui
+run_agent/chat_ui
 
 <!-- 
 

@@ -95,127 +95,6 @@ EXISTING_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-# class SummarizingSaver(BaseCheckpointSaver):
-#     def __init__(self, inner: BaseCheckpointSaver, summarizer, threshold: int, key="messages"):
-#         self.inner = inner
-#         self.summarizer = summarizer
-#         self.threshold = threshold
-#         self.channel = key
-
-#     # Delegate config_specs to inner saver
-#     @property
-#     def config_specs(self):
-#         return self.inner.config_specs
-
-#     # Sync methods - delegate to inner saver
-#     def get_tuple(self, config):
-#         return self.inner.get_tuple(config)
-
-#     def list(self, config, *, filter=None, before=None, limit=None):
-#         return self.inner.list(config, filter=filter, before=before, limit=limit)
-
-#     def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
-#         print(" ----------- checkpoint put called -------------")
-#         values:ChatState = checkpoint["channel_values"]
-#         chat_messages:List[BaseMessage] = values.get(self.channel, [])
-#         llm = get_aws_modal()
-#         if len(chat_messages) > 0:
-#             # Ensure all messages have IDs before summarization
-#             for msg in chat_messages:
-#                 if not hasattr(msg, 'id') or msg.id is None:
-#                     msg.id = str(uuid.uuid4())
-#             if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
-#                 chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4())))  # restore summary if message were lost in new checkpoint
-#             if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
-#                 result = summarize_messages(
-#                     messages=chat_messages,
-#                     running_summary=values.get("summary"),
-#                     model=llm,
-#                     max_tokens=max_tokens/1.33,
-#                     max_tokens_before_summary=max_tokens/3.33,
-#                     max_summary_tokens=max_tokens/3.34,
-#                     token_counter=count_tokens_approximately,
-#                     initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
-#                     existing_summary_prompt=EXISTING_SUMMARY_PROMPT
-#                 )                
-#                 for msg in result.messages:
-#                     if not hasattr(msg, 'id') or msg.id is None:
-#                         msg.id = str(uuid.uuid4())
-#                 values[self.channel] = result.messages
-#                 if result.messages and isinstance(result.messages[0], messages.SystemMessage):
-#                     running_summary_msg = get_buffer_string([result.messages[0]])
-#                     summarized_message_ids = set([msg.id for msg in result.messages])
-#                     result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
-#                 elif chat_messages:
-#                     running_summary_msg = get_buffer_string(chat_messages)
-#                     summarized_message_ids = {uuid.uuid4()}
-#                 values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
-#         return self.inner.put(config, checkpoint, metadata, new_versions)
-
-#     def put_writes(self, config, writes, task_id, task_path=""):
-#         return self.inner.put_writes(config, writes, task_id, task_path)
-
-#     def delete_thread(self, thread_id):
-#         return self.inner.delete_thread(thread_id)
-
-#     # Async methods - delegate to inner saver
-#     async def aget_tuple(self, config):
-#         return await self.inner.aget_tuple(config)
-
-#     async def alist(self, config, *, filter=None, before=None, limit=None):
-#         async for item in self.inner.alist(config, filter=filter, before=before, limit=limit):
-#             yield item
-
-#     async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
-#         print(" ----------- checkpoint puta called -------------")
-#         values:ChatState = checkpoint["channel_values"]
-#         chat_messages:List[BaseMessage] = values.get(self.channel, [])
-#         llm = get_aws_modal()
-#         if len(chat_messages) > 0:
-#             # Ensure all messages have IDs before summarization
-#             for msg in chat_messages:
-#                 if not hasattr(msg, 'id') or msg.id is None:
-#                     msg.id = str(uuid.uuid4())
-#             if len(chat_messages) == 1 and isinstance(chat_messages[0], messages.HumanMessage) and values.get("summary"):
-#                 chat_messages.insert(0,messages.AIMessage(content=values.get("summary").summary, id=str(uuid.uuid4()))) # restore summary if message were lost in new checkpoint
-            
-#             if not values.get("summary") or len(values.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
-#                 result = summarize_messages(
-#                     messages=chat_messages,
-#                     running_summary=values.get("summary"),
-#                     model=llm,
-#                     max_tokens=max_tokens/1.33,
-#                     max_tokens_before_summary=max_tokens/3.33,
-#                     max_summary_tokens=max_tokens/3.34,
-#                     token_counter=count_tokens_approximately,
-#                     initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
-#                     existing_summary_prompt=EXISTING_SUMMARY_PROMPT
-#                 )                
-#                 for msg in result.messages:
-#                     if not hasattr(msg, 'id') or msg.id is None:
-#                         msg.id = str(uuid.uuid4())
-#                 values[self.channel] = result.messages
-#                 if result.messages and isinstance(result.messages[0], messages.SystemMessage):
-#                     running_summary_msg = get_buffer_string([result.messages[0]])
-#                     summarized_message_ids = set([msg.id for msg in result.messages])                    
-#                     result.messages[0]=messages.AIMessage(content=running_summary_msg,id=result.messages[0].id) # ag-ui don't want first message to be system message
-#                 elif chat_messages:
-#                     running_summary_msg = get_buffer_string(chat_messages)
-#                     summarized_message_ids = {uuid.uuid4()}
-#                 values["summary"] = RunningSummary(summary=running_summary_msg, summarized_message_ids=summarized_message_ids, last_summarized_message_id=None) 
-#         return await self.inner.aput(config, checkpoint, metadata, new_versions)
-
-#     async def aput_writes(self, config, writes, task_id, task_path=""):
-#         return await self.inner.aput_writes(config, writes, task_id, task_path)
-
-#     async def adelete_thread(self, thread_id):
-#         return await self.inner.adelete_thread(thread_id)
-
-#     def get_next_version(self, current, channel):
-#         print(" ----------- checkpoint get_next_version called -------------")
-#         return self.inner.get_next_version(current, channel)
-
-
 class AsyncSqliteSaverWrapper(BaseCheckpointSaver):
     """
     A wrapper around SqliteSaver that provides full async support while maintaining
@@ -355,6 +234,7 @@ class ChatState(TypedDict):
     summary:RunningSummary | None
     last_store_id: str | None
     updated_log_term_memory: bool
+    messages_history: List[BaseMessage]
 
 
 
@@ -545,8 +425,22 @@ class MyAgent:
         """Get the current state of the agent"""
         if not self.graph.get_state(config).values:
             print("\n\n~~~~~~~~~~~~ Init ~~~~~~~~~~~~~~\n\n")
-            self.graph.update_state(config, values={'messages': [],"tool_call_count": 0,"thread_id": config["configurable"]["thread_id"],"summary":None},as_node="tools")
+            self.graph.update_state(
+                config, 
+                values={
+                    'messages': [],
+                    "tool_call_count": 0,
+                    "thread_id": config["configurable"]["thread_id"],
+                    "summary": None,
+                    "messages_history": []
+                },
+                as_node="tools"
+            )
         return self.graph.get_state(config).values
+    
+    def set_state(self, config:RunnableConfig, new_state:ChatState,as_node:str='tools'):
+        """Set the current state of the agent"""
+        self.graph.update_state(config, values=new_state,as_node=as_node)
 
         
     def filter_visible_messages(self,messages: List[BaseMessage]) -> List[BaseMessage]:
@@ -564,7 +458,7 @@ class MyAgent:
         """Mark tool call and tool result messages as hidden for specific tools"""
         processed_messages = []
         for msg in messages:
-            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+            if hasattr(msg, 'tool_calls') and msg.tool_calls: # todo: also handle `tool_use`
                 # Check if any tool call is for memory-related tools
                 should_hide = any(tool_call.get('name') in tool_names for tool_call in msg.tool_calls)
                 if should_hide:
@@ -585,9 +479,50 @@ class MyAgent:
             processed_messages.append(msg)
         return processed_messages
 
-    def set_state(self, config:RunnableConfig, new_state:ChatState,as_node:str='tools'):
-        """Set the current state of the agent"""
-        self.graph.update_state(config, values=new_state,as_node=as_node)
+    def update_messages_history(self, config: RunnableConfig, existing_history: List[BaseMessage], messages: List[BaseMessage]):
+        """
+        Update messages_history with all messages except those marked as hidden_from_chat.
+        This method is thread-safe using synchronous graph state operations.
+        
+        Args:
+            config: The RunnableConfig for the current thread
+            messages: List of messages to potentially add to history
+        """
+        
+        # Filter messages to exclude those with hidden_from_chat = True
+        visible_messages = []
+        
+        for msg in messages:
+            additional_kwargs = getattr(msg, 'additional_kwargs', msg.additional_kwargs or {})
+            if not additional_kwargs.get('hidden_from_chat', False) and len(msg.content) > 0:
+                # Ensure message has an ID
+                if not hasattr(msg, 'id') or msg.id is None:
+                    msg.id = str(uuid.uuid4())
+                visible_messages.append(msg)
+        
+
+        # Only update if there are new visible messages
+        if visible_messages:
+            # Create a set of existing message IDs to avoid duplicates
+            existing_ids = {msg.id for msg in existing_history if hasattr(msg, 'id') and msg.id}
+            
+            # Add only new messages (not already in history)
+            new_messages = [msg for msg in visible_messages if msg.id not in existing_ids]
+            
+            if new_messages:
+                updated_history = existing_history + new_messages
+                
+                # # Update the state synchronously (thread-safe)
+                # self.graph.update_state(
+                #     config, 
+                #     {"messages_history": updated_history},
+                #     as_node="tools"  # Use as_node to control the update origin
+                # )
+                
+                print(f"------ Added {len(new_messages)} new messages to history. Total history: {len(updated_history)} messages")
+                return updated_history
+
+        return existing_history
 
 
     def decide_store_messages(self,state:ChatState,config: RunnableConfig, store: BaseStore,override_decision:bool=False) -> bool: 
@@ -626,33 +561,28 @@ Then call the store_messages tool with meaningful content and context parameters
         return False
             
 
-    def init_conversation(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
+    def init_conversation(self, state: ChatState, config: RunnableConfig, *, store: BaseStore): # get_state won't  work properly in initial conv
         """Initialize the conversation state"""
         # Initialize messages if not already set
-
-        print("\n--state--",state)
+        print("\n--state--", state)
 
         if not state.get("messages"):
             state["messages"] = []
+        
+        # Initialize messages_history if not already set
+        if not state.get("messages_history"):
+            state["messages_history"] = []
             
         def llm_studio_fix():
             if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
-                last = state["messages"][-1]
-                if isinstance(last, dict):
-                    state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
+                if state["messages"]:  # Check if messages list is not empty
+                    last = state["messages"][-1]
+                    if isinstance(last, dict):
+                        state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
 
-        llm_studio_fix()        
+        llm_studio_fix()  
 
-
-        base_graph_states = list(self._base_graph.get_state_history(config))
-        graph_states = list(self.graph.get_state_history(config))
-        print(f"\n\n ----- [[ checkpoints ]] -----",config["configurable"]["thread_id"])
-        print(f"\n\n ----- base_graph_states({len(base_graph_states)}) -----")
-        for state in base_graph_states:
-            print(f"Checkpoint: {state}\n")        
-        print(f"\n\n ----- graph_states({len(graph_states)}) -----")
-        for state in graph_states:
-            print(f"Checkpoint: {state}\n")
+        state["messages_history"]=self.update_messages_history(config, state['messages_history'], [state["messages"][-1]])
 
         # Return command to route to LLM node
         return Command(
@@ -661,7 +591,8 @@ Then call the store_messages tool with meaningful content and context parameters
                 'tool_call_count': 0,
                 'thread_id': config["configurable"]["thread_id"],
                 "updated_log_term_memory":False,
-                "summary": state.get("summary",None)
+                "summary": state.get("summary",None),
+                "messages_history": state.get("messages_history", [])
             },
             goto="llm"
         )
@@ -721,14 +652,17 @@ Then call the store_messages tool with meaningful content and context parameters
             print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
+        # Update messages_history with the new LLM response and chat messages
+        updated_messages = chat_messages + [response]
+        
+        
         # Always go to router after LLM response
-
-
         return Command(
             update={
-                'messages': chat_messages + [response],
+                'messages': updated_messages,
                 'tool_call_count': state['tool_call_count'],
                 'thread_id': state['thread_id'],
+                'messages_history': self.update_messages_history(config, state['messages_history'], updated_messages),
                 "summary": RunningSummary(summary=running_summary_msg,summarized_message_ids=summarized_message_ids,last_summarized_message_id=None) if running_summary_msg else state["summary"]
             },
             goto="route"
@@ -753,12 +687,19 @@ Then call the store_messages tool with meaningful content and context parameters
         # Also mark the AI message that made the tool calls as hidden if it called memory tools
         updated_state_messages = self.mark_tool_messages_as_hidden(state['messages'], memory_tool_names)
 
+        # Combine all messages for the updated state
+        all_updated_messages = updated_state_messages + result['messages']
+        
+        # Update messages_history with all new messages (filtering will be done in update_messages_history)
+       
+
         # print("---tools_node: ",result,"\n\n")
         # Always go to router after tools execution
         return Command(
             update={
-                'messages': updated_state_messages + result['messages'],
-                'tool_call_count': state['tool_call_count']+1
+                'messages': all_updated_messages,
+                'tool_call_count': state['tool_call_count']+1,
+                'messages_history': self.update_messages_history(config,state["messages_history"], all_updated_messages)
             },
             goto="route"
         )
@@ -798,11 +739,18 @@ Then call the store_messages tool with meaningful content and context parameters
                     )
             else:
                 # User provided new input i.e., its neither yes nor no - this becomes a new human message
+                new_human_message = messages.HumanMessage(content=user_answer, id=str(uuid.uuid4()))
+                updated_messages = state['messages'] + [new_human_message]
+                
+                # Update messages_history with the new human message
+                
+                
                 # Reset tool count and restart LLM processing
                 return Command(
                     update={
-                        'messages': state['messages'] + [messages.HumanMessage(content=user_answer)], 
-                        'tool_call_count': 0
+                        'messages': updated_messages, 
+                        'tool_call_count': 0,
+                        'messages_history': self.update_messages_history(config,state['messages_history'], [new_human_message])
                     },
                     goto="llm"
                 )
