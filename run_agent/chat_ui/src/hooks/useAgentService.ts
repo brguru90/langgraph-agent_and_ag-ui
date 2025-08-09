@@ -546,7 +546,12 @@ export const useAgentService = (): UseAgentService => {
                   // Handle tool call events via raw events
                   if (event.event && typeof event.event === 'object') {
                     const rawEventData = event.event;
-                    
+
+                    if(event.event?.additional_kwargs?.hidden_from_chat) {
+                      console.log("🔒 Hidden from chat:", event.event.additional_kwargs.hidden_from_chat);
+                      return;  // Skip processing this event
+                    }
+
                     // Handle tool start event
                     if (rawEventData.event === 'on_tool_start') {
                       console.log(

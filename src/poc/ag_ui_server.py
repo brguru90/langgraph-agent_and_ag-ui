@@ -359,10 +359,12 @@ async def handle_agent_events(my_agent: MyAgent, state: ChatState, config: Runna
                     current_message_id = None
                     message_type = None
                 
+                # Send RUN_ERROR and set interrupted flag to prevent RUN_FINISHED
                 yield encoder.encode(RunErrorEvent(
                     type=EventType.RUN_ERROR,
                     message=event_data.get("message", "Unknown error")
                 ))
+                interrupted = True
                 break
         
         # End any ongoing message or tool call if stream completed normally
@@ -413,11 +415,18 @@ async def handle_agent_events(my_agent: MyAgent, state: ChatState, config: Runna
                 message_id=current_message_id
             ))
         
-        yield encoder.encode(RunErrorEvent(
-            type=EventType.RUN_ERROR,
-            message=str(e)
-        ))
-        interrupted = True
+        # Send RUN_ERROR and set interrupted flag to prevent RUN_FINISHED from being sent later
+        try:
+            error_event = RunErrorEvent(
+                type=EventType.RUN_ERROR,
+                message=str(e)
+            )
+            yield encoder.encode(error_event)
+        except Exception as encode_error:
+            print(f"Failed to encode RUN_ERROR event: {encode_error}")
+        
+        # Return immediately after sending RUN_ERROR
+        return
 
 
     print("----- Ending handle_agent_events -----")
@@ -459,43 +468,51 @@ async def endpoint(input_data: RunAgentInputExtended, request: Request):
 
             print("-----gen------")
 
-            # Handle agent events using the separate function
-            interrupted_detected = False
-            async for event_data in handle_agent_events(my_agent, state, config, encoder):
-                yield event_data
-                
-                # # Check if this event is an interrupt event to track interruption status
-                # try:
-                #     # Extract event data from the encoded string if possible
-                #     event_str = event_data.decode() if hasattr(event_data, 'decode') else str(event_data)
-                    
-                #     # Parse the event to check for interrupt
-                #     if ('"type":"CUSTOM"' in event_str and '"name":"on_interrupt"' in event_str) or \
-                #        ('"type":"RUN_ERROR"' in event_str):
-                #         interrupted_detected = True
-                # except:
-                #     pass
+            # Track if a RUN_ERROR event was sent
+            run_error_detected = False
             
-            # Send appropriate run finished event based on interruption status
-            if interrupted_detected:
-                yield encoder.encode(RunFinishedEvent(
-                    type=EventType.RUN_FINISHED,
-                    thread_id=input_data.thread_id,
-                    run_id=input_data.run_id,
-                ))
-            else:
-                yield encoder.encode(RunFinishedEvent(
-                    type=EventType.RUN_FINISHED,
-                    thread_id=input_data.thread_id,
-                    run_id=input_data.run_id
-                ))
+            # Handle agent events using the separate function
+            async for event_data in handle_agent_events(my_agent, state, config, encoder):
+                # Check if this is a RUN_ERROR event before yielding it
+                try:
+                    event_str = event_data.decode() if hasattr(event_data, 'decode') else str(event_data)
+                    if '"type":"RUN_ERROR"' in event_str:
+                        run_error_detected = True
+                        print("RUN_ERROR detected, will not send RUN_FINISHED")
+                except Exception as e:
+                    print(f"Error checking event data: {e}")
+                
+                yield event_data
+            
+            # Only send RUN_FINISHED if no RUN_ERROR was detected
+            if not run_error_detected:
+                try:
+                    yield encoder.encode(RunFinishedEvent(
+                        type=EventType.RUN_FINISHED,
+                        thread_id=input_data.thread_id,
+                        run_id=input_data.run_id
+                    ))
+                except Exception as e:
+                    print(f"Error sending RUN_FINISHED: {e}")
+                    # Don't try to send another RUN_ERROR here as that could cause more problems
             
         except Exception as error:
             print(f"Error in agent processing: {error}")
-            yield encoder.encode(RunErrorEvent(
-                type=EventType.RUN_ERROR,
-                message=str(error)
-            ))
+            traceback.print_exc()
+            
+            # Only send RUN_ERROR if no RUN_ERROR was already detected
+            if not run_error_detected:
+                try:
+                    # Send RUN_ERROR event but don't send RUN_FINISHED afterward
+                    yield encoder.encode(RunErrorEvent(
+                        type=EventType.RUN_ERROR,
+                        message=str(error)
+                    ))
+                except Exception as e:
+                    print(f"Error sending RUN_ERROR: {e}")
+            
+            # Exit generator early to avoid sending RUN_FINISHED after an error
+            return
         print("-----")
 
     return StreamingResponse(gen(), media_type=encoder.get_content_type())
