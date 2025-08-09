@@ -95,7 +95,7 @@ export class MockChatHistoryAPI {
 
   static async createThread(title: string, firstMessage: string): Promise<ChatThread> {
     await new Promise(resolve => setTimeout(resolve, 100));
-    const newThreadId = `thread-${randomUUID()}`;
+    const newThreadId = randomUUID();
     
     // Check if thread already exists (shouldn't happen but safety check)
     const existingThread = this.threads.find(t => t.id === newThreadId);

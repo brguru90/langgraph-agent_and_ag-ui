@@ -17,6 +17,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.runnables.base import RunnableBindingBase
 from langchain_core.tracers.schemas import Run
 from langchain_core.messages.base import BaseMessage
+from langchain_core.messages.modifier import RemoveMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langmem.short_term import SummarizationNode,summarize_messages,RunningSummary
 from langgraph.func import entrypoint, task
@@ -64,7 +65,9 @@ warnings.filterwarnings(
 
 # claude-sonnet-4 -> supports upto 200k tokens
 
-max_tokens = 65536
+# max_tokens = 65536
+# max_tokens = 2000
+max_tokens = 20000
 END_CONV="end_conv"
 
 def get_aws_modal():
@@ -75,25 +78,6 @@ def get_aws_modal():
         temperature=0.0,
         max_tokens=max_tokens,         
     )
-
-INITIAL_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        ("placeholder", "{messages}"),
-        ("user", "Create a summary of the conversation and also summaries the user query at the beginning of summary for above:"),
-    ]
-)
-
-
-EXISTING_SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        ("placeholder", "{messages}"),
-        (
-            "user",
-            "This is summary of the conversation so far: {existing_summary}\n\n"
-            "Extend this summary by taking into account the new messages and also summaries the user query at the beginning of summary above:",
-        ),
-    ]
-)
 
 class AsyncSqliteSaverWrapper(BaseCheckpointSaver):
     """
@@ -237,6 +221,7 @@ class ChatState(TypedDict):
     messages_history: List[BaseMessage]
 
 
+memory_tool_names = {'store_messages':"memorizing", 'relevant_memory':"recalling", 'recent_memory':"recalling recent", 'query_memory_id':"querying memory"}
 
 
 async def query_memories(
@@ -424,7 +409,6 @@ class MyAgent:
     def get_state(self, config:RunnableConfig) -> ChatState:
         """Get the current state of the agent"""
         if not self.graph.get_state(config).values:
-            print("\n\n~~~~~~~~~~~~ Init ~~~~~~~~~~~~~~\n\n")
             self.graph.update_state(
                 config, 
                 values={
@@ -454,32 +438,44 @@ class MyAgent:
         return visible_messages
 
 
-    def mark_tool_messages_as_hidden(self,messages: List[BaseMessage], tool_names: set) -> List[BaseMessage]:
+    def should_hide_message(self,message:BaseMessage) -> bool:
+        """Check if a message should be hidden based on tool names"""
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            # Check if any tool call is for memory-related tools
+            return any(tool_call.get('name') in memory_tool_names for tool_call in message.tool_calls)
+        elif hasattr(message, 'name') and message.name in memory_tool_names:
+            # Tool result message
+            return True
+        return False
+
+    def mark_tool_messages_as_hidden(self,chat_messages: List[BaseMessage]) -> List[BaseMessage]:
         """Mark tool call and tool result messages as hidden for specific tools"""
         processed_messages = []
-        for msg in messages:
-            if hasattr(msg, 'tool_calls') and msg.tool_calls: # todo: also handle `tool_use`
-                # Check if any tool call is for memory-related tools
-                should_hide = any(tool_call.get('name') in tool_names for tool_call in msg.tool_calls)
-                if should_hide:
-                    msg.additional_kwargs = msg.additional_kwargs or {}
-                    msg.additional_kwargs.update({
-                        'hidden_from_chat': True, 
-                        'message_type': 'tool_call',
-                        'hidden_tools': [tc.get('name') for tc in msg.tool_calls if tc.get('name') in tool_names]
-                    })
-            elif hasattr(msg, 'name') and msg.name in tool_names:
-                # Tool result message
+        for msg in chat_messages:
+            if self.should_hide_message(msg): # todo: also handle `tool_use`
                 msg.additional_kwargs = msg.additional_kwargs or {}
                 msg.additional_kwargs.update({
                     'hidden_from_chat': True, 
-                    'message_type': 'tool_result',
-                    'tool_name': msg.name
                 })
+                tool_name= getattr(msg, 'name', None) 
+                if tool_name:
+                    processed_messages.append(messages.AIMessage(
+                        content=memory_tool_names[tool_name],
+                        id=msg.id,
+                    ))
+                    continue
+                tool_names= map(lambda call: call.get('name',None), getattr(msg, 'tool_calls', [{}]))
+                if tool_names:
+                    for tool_name in tool_names:
+                        processed_messages.append(messages.AIMessage(
+                            content=memory_tool_names[tool_name],
+                            id=f"{tool_name}_{msg.id}",
+                        ))               
+                    continue
             processed_messages.append(msg)
         return processed_messages
 
-    def update_messages_history(self, config: RunnableConfig, existing_history: List[BaseMessage], messages: List[BaseMessage]):
+    def update_messages_history(self, config: RunnableConfig, existing_history: List[BaseMessage], chat_messages: List[BaseMessage]):
         """
         Update messages_history with all messages except those marked as hidden_from_chat.
         This method is thread-safe using synchronous graph state operations.
@@ -488,17 +484,22 @@ class MyAgent:
             config: The RunnableConfig for the current thread
             messages: List of messages to potentially add to history
         """
+
+        messages=self.mark_tool_messages_as_hidden(chat_messages)
         
         # Filter messages to exclude those with hidden_from_chat = True
         visible_messages = []
         
         for msg in messages:
-            additional_kwargs = getattr(msg, 'additional_kwargs', msg.additional_kwargs or {})
-            if not additional_kwargs.get('hidden_from_chat', False) and len(msg.content) > 0:
-                # Ensure message has an ID
-                if not hasattr(msg, 'id') or msg.id is None:
-                    msg.id = str(uuid.uuid4())
-                visible_messages.append(msg)
+            try:
+                additional_kwargs = getattr(msg, 'additional_kwargs', msg.additional_kwargs or {})
+                if not additional_kwargs.get('hidden_from_chat', False) and len(msg.content) > 0:
+                    # Ensure message has an ID
+                    if not hasattr(msg, 'id') or msg.id is None:
+                        msg.id = str(uuid.uuid4())
+                    visible_messages.append(msg)
+            except:
+                print(f"Error processing message: {traceback.format_exc()}",msg)
         
 
         # Only update if there are new visible messages
@@ -566,21 +567,37 @@ Then call the store_messages tool with meaningful content and context parameters
         # Initialize messages if not already set
         print("\n--state--", state)
 
-        if not state.get("messages"):
-            state["messages"] = []
-        
+          
         # Initialize messages_history if not already set
         if not state.get("messages_history"):
             state["messages_history"] = []
-            
+
+        if not state.get("messages"):
+            state["messages"] = []
+        
         def llm_studio_fix():
             if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
                 if state["messages"]:  # Check if messages list is not empty
-                    last = state["messages"][-1]
-                    if isinstance(last, dict):
-                        state["messages"][-1] = messages.HumanMessage(content=last["content"],id=str(uuid.uuid4()))
+                    for i in range(len(state["messages"])):
+                        msg = state["messages"][i]
+                        if isinstance(msg, dict):
+                            state["messages"][i] = messages.HumanMessage(content=msg["content"],id=str(uuid.uuid4()))
 
-        llm_studio_fix()  
+        llm_studio_fix()
+
+        if len(state["messages_history"])>0:
+            new_messages=[]
+            last_finish=state["messages_history"][-1].id
+            for msg in state["messages"]:
+                if msg.id == last_finish:
+                    last_finish=None
+                if not last_finish:
+                    new_messages.append(msg)
+            if not last_finish:
+                print(f"----- found {len(new_messages)} new messages since last finish")
+                state["messages"] = new_messages
+
+
 
         state["messages_history"]=self.update_messages_history(config, state['messages_history'], [state["messages"][-1]])
 
@@ -607,7 +624,7 @@ Then call the store_messages tool with meaningful content and context parameters
                 goto="llm"
             )
 
-        if os.environ.get("USING_LLM_STUDIO", "true").lower() == "true":
+        if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
             self.sql_lite_conn.commit() 
             self.store_conn.commit()  
         
@@ -620,29 +637,13 @@ Then call the store_messages tool with meaningful content and context parameters
     async def llm_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
         """LLM node - only responsible for calling llm.invoke"""
 
-        for msg in state["messages"]:
-            msg.id = msg.id or str(uuid.uuid4()) # Ensure all messages have IDs
-        chat_messages= state["messages"]
-        if not state.get("summary") or len(state.get("summary").summarized_message_ids.intersection(set([msg.id for msg in chat_messages]))) == 0:
-            chat_messages = summarize_messages(
-                messages=chat_messages,
-                running_summary=state["summary"],
-                model=self.llm,
-                max_tokens=max_tokens/1.33,
-                max_tokens_before_summary=max_tokens/3.33,
-                max_summary_tokens=max_tokens/3.34,
-                token_counter=count_tokens_approximately,
-                initial_summary_prompt=INITIAL_SUMMARY_PROMPT,
-                existing_summary_prompt=EXISTING_SUMMARY_PROMPT
-            ).messages # if context exceeds its summarize initial messages and slices it off
-        running_summary_msg=""
-        summarized_message_ids={}
-        if chat_messages and isinstance(chat_messages[0], messages.SystemMessage): # first message is system message means its summary
-            if self.decide_store_messages(state, config, store):
-                chat_messages.append(state["messages"][-1])
-            running_summary_msg = get_buffer_string([chat_messages[0]])
-            summarized_message_ids = set([msg.id for msg in chat_messages])
-            chat_messages[0]=messages.AIMessage(content=running_summary_msg,id=chat_messages[0].id) # ag-ui don't want first message to be system message
+        chat_messages =state["messages"]
+        token_limit_warning=False
+        # if count_tokens_approximately(state["messages"]) > (max_tokens*0.75):
+        #     if not chat_messages[-1].additional_kwargs.get("token_limit_warning", False):
+        #         chat_messages.append(messages.HumanMessage(content="User is approaching token limit,consider summarizing", id=str(uuid.uuid4()),additional_kwargs={"hidden_from_chat": True,"token_limit_warning": True}))
+        #     else:
+        #         token_limit_warning=True
         for msg in chat_messages:
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
@@ -652,10 +653,10 @@ Then call the store_messages tool with meaningful content and context parameters
             print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
-        # Update messages_history with the new LLM response and chat messages
         updated_messages = chat_messages + [response]
-        
-        
+        if token_limit_warning:
+            updated_messages = chat_messages[0:1]+list(filter(lambda msg: msg.type not in ["human","ai"],chat_messages[1:])) + [response]
+
         # Always go to router after LLM response
         return Command(
             update={
@@ -663,7 +664,6 @@ Then call the store_messages tool with meaningful content and context parameters
                 'tool_call_count': state['tool_call_count'],
                 'thread_id': state['thread_id'],
                 'messages_history': self.update_messages_history(config, state['messages_history'], updated_messages),
-                "summary": RunningSummary(summary=running_summary_msg,summarized_message_ids=summarized_message_ids,last_summarized_message_id=None) if running_summary_msg else state["summary"]
             },
             goto="route"
         )
@@ -680,15 +680,8 @@ Then call the store_messages tool with meaningful content and context parameters
         )
         result = await self.tool_node.ainvoke(state)
 
-        # Mark memory-related tool messages as hidden
-        memory_tool_names = {'store_messages', 'relevant_memory', 'recent_memory', 'query_memory_id'}
-        result['messages'] = self.mark_tool_messages_as_hidden(result['messages'], memory_tool_names)
-        
-        # Also mark the AI message that made the tool calls as hidden if it called memory tools
-        updated_state_messages = self.mark_tool_messages_as_hidden(state['messages'], memory_tool_names)
-
         # Combine all messages for the updated state
-        all_updated_messages = updated_state_messages + result['messages']
+        all_updated_messages = state['messages'] + result['messages']
         
         # Update messages_history with all new messages (filtering will be done in update_messages_history)
        
@@ -709,10 +702,27 @@ Then call the store_messages tool with meaningful content and context parameters
         # !!! Command pattern allows us to define custom logic and state can be update during routing
         
         # Get the last message to determine routing
+
+
+        # fixed_messages=list(filter(lambda msg: isinstance(msg, messages.BaseMessage) and not isinstance(msg,RemoveMessage), state['messages']))
+        # if len(fixed_messages) < len(state['messages']):
+        #     return Command(
+        #         update={'messages': fixed_messages},
+        #         goto="route"
+        #     )
+
         last_message = state['messages'][-1]
+
         
         print(f"--route_node: message_type={type(last_message).__name__}, tool_count={state['tool_call_count']}, has_tool_calls={hasattr(last_message, 'tool_calls') and bool(last_message.tool_calls)}, message_type_attr={getattr(last_message, 'type', 'no_type')}")
-        
+
+        # if count_tokens_approximately(state["messages"]) >= max_tokens*0.75:
+        #     return Command(
+        #         update={'tool_call_count': 0},
+        #         goto="summarizer"
+        #     )
+
+
         # Check if we've exceeded tool call limit
         if state['tool_call_count'] >= self.max_tool_calls:
             print(f">>> Interrupting for human input... on thread_id={state['thread_id']}")
@@ -781,6 +791,7 @@ Then call the store_messages tool with meaningful content and context parameters
 
     def on_start(self, run:Run, config:RunnableConfig):
         print("\n\ninitial state:", json.dumps(self.get_state(config),default=str))
+        print("\nconfig:", json.dumps(config,default=str))
         self.get_state(config)
 
     async def init(self):
@@ -819,18 +830,31 @@ Then call the store_messages tool with meaningful content and context parameters
 
         self.llm = self.llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
+
+
+        summarization_node = SummarizationNode(
+            model=self.llm,
+            max_tokens=max_tokens*0.35,
+            max_tokens_before_summary=max_tokens*0.35,
+            max_summary_tokens=max_tokens*0.30,
+            output_messages_key="messages"
+        )
         
         builder = StateGraph(ChatState)
         builder.add_node('start_conv', self.init_conversation)
         builder.add_node('llm', self.llm_node)
         builder.add_node('tools', self.tools_node)
         builder.add_node('route', self.route_node)
+        # builder.add_node('summarizer', summarization_node)
         builder.add_node('end_conv', self.before_conversation_end)
 
         # builder.add_edge(START, 'start_conv')
         builder.set_entry_point('start_conv')
         builder.add_edge('start_conv', 'llm')
+        # builder.add_edge('summarizer', 'route')
         builder.add_edge('end_conv', END)
+
+        # builder.add_conditional_edges()
             
         
         # memory = InMemorySaver()

@@ -9,7 +9,10 @@ async def run_test_tool_calls(my_agent:MyAgent):
     # thread_id = str(uuid.uuid4())
     thread_id="1517e275-850e-426a-970b-da3bb41a30d7"
     config = {
-        "configurable": {"thread_id": thread_id},
+        "configurable": {
+            "thread_id": thread_id,
+            "user_id": "guru",
+        },
         "run_id":str(uuid.uuid4()),
         "recursion_limit": 25  # Increase recursion limit to prevent premature termination
     }
@@ -28,10 +31,8 @@ async def run_test_tool_calls(my_agent:MyAgent):
                 output=await my_agent.graph.ainvoke(Command(resume=user_message), config=config)
             else:
                 state=my_agent.get_state(config)
-                state['messages'].append(messages.HumanMessage(content=user_message))
-                my_agent.set_state(config, state)
-                # print("Current state: ", my_agent.get_state(config), '\n')
-                output=await my_agent.graph.ainvoke(my_agent.get_state(config), config=config)
+                state['messages']=[messages.HumanMessage(content=user_message)]
+                output=await my_agent.graph.ainvoke(state, config=config)
 
             interrupted=False                
             # Check for interrupts in the new format
@@ -42,8 +43,7 @@ async def run_test_tool_calls(my_agent:MyAgent):
                 continue
 
             # print(json.dumps(output, indent=2,default=str), '\n')
-            my_agent.set_state(config, output)
-            print(my_agent.get_state(config)['messages'][-1].content, '\n')
+            print(output['messages_history'][-1].content, '\n')
             await asyncio.sleep(2)
             # print(json.dumps(my_agent.state, indent=2,default=str), '\n')
         except KeyboardInterrupt:

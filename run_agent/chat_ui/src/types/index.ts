@@ -141,6 +141,7 @@ export interface ThreadMessagesResponse {
 export interface RunData {
   runId: string;
   forwardedProps?: {
+    user_id: string;
     command?: {
       resume: string;
     };

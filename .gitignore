@@ -30,3 +30,4 @@ graph_studio_data.sqlite-shm
 graph_data.sqlite-x-writes-290-value.bin
 graph_studio_data.sqlite-x-writes-217-value.bin
 store_data.sqlite
+.ipynb_checkpoints

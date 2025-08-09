@@ -450,7 +450,7 @@ export const useAgentService = (): UseAgentService => {
   );
 
   const chatWithAgent = useCallback(
-    async (message: string, threadId: string): Promise<void> => {
+    async (message: string, threadId: string,userId:string="guru"): Promise<void> => {
       // Prevent concurrent runs
       if (isRunning) {
         console.warn("⚠️ Agent is already running. Ignoring new request.");
@@ -465,13 +465,13 @@ export const useAgentService = (): UseAgentService => {
             // debug: true,
           });
         }
-        const state = await getAgentState(threadId);
+        // const state = await getAgentState(threadId);
         return new HttpAgent({
           url: `http://localhost:8000/ag-ui/`,
           // debug: true,
           threadId: threadId,
-          initialState: state,
-          initialMessages: mapStateMessagesToAGUI(state.messages),
+          // initialState: state,
+          // initialMessages: mapStateMessagesToAGUI(state.messages),
         });
       })();
       agent.messages.push({
@@ -491,6 +491,9 @@ export const useAgentService = (): UseAgentService => {
       let isResume = true;
       let runConfig: RunData = {
         runId: runId,
+        forwardedProps:{
+          user_id:userId,
+        }
       };
 
       while (isResume) {
@@ -538,7 +541,7 @@ export const useAgentService = (): UseAgentService => {
                   pushMessages(event.event);
                 },
                 onRawEvent({event}){
-                  console.log("📡 Raw event:", event);
+                  console.log("📡 Raw event:", event,typeof(event.event));
                   
                   // Handle tool call events via raw events
                   if (event.event && typeof event.event === 'object') {
@@ -620,6 +623,7 @@ export const useAgentService = (): UseAgentService => {
                       runConfig = {
                         runId: runId,
                         forwardedProps: {
+                          user_id:userId,
                           command: {
                             resume: userChoice,
                           },

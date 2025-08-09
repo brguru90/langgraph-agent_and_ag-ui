@@ -1,0 +1,557 @@
+values:
+  messages:
+    - content: list comp
+      additional_kwargs: {}
+      response_metadata: {}
+      type: human
+      name: null
+      id: 3a10c00e-0346-4def-aad9-a7457bbaaf0e
+      example: false
+    - content:
+        - type: text
+          text: I'll help you list the Fabric Design System (FDS) components. Let me start by getting the startup instructions and then fetch the component list.
+          index: 0
+        - type: tool_use
+          name: StartupInstructions
+          id: tooluse_s9Lk69XqQVSdJG_lng-51A
+          index: 1
+          input: ""
+      additional_kwargs: {}
+      response_metadata:
+        stopReason: tool_use
+        metrics:
+          latencyMs: 2818
+        model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
+        ResponseMetadata:
+          RequestId: 0ed9b07b-465d-4e55-814b-ac19afd55688
+          HTTPStatusCode: 200
+          HTTPHeaders:
+            date: Fri, 08 Aug 2025 19:34:13 GMT
+            content-type: application/vnd.amazon.eventstream
+            transfer-encoding: chunked
+            connection: keep-alive
+            x-amzn-requestid: 0ed9b07b-465d-4e55-814b-ac19afd55688
+          RetryAttempts: 0
+      type: ai
+      name: null
+      id: run--98a43276-9e5d-4517-878e-6123df34dd1e
+      example: false
+      tool_calls:
+        - name: StartupInstructions
+          args: {}
+          id: tooluse_s9Lk69XqQVSdJG_lng-51A
+          type: tool_call
+      invalid_tool_calls: []
+      usage_metadata:
+        input_tokens: 1539
+        output_tokens: 70
+        total_tokens: 1609
+        input_token_details:
+          cache_creation: 0
+          cache_read: 0
+    - content: "{\"role\":\"assistant\",\"content\":{\"type\":\"text\",\"text\":\"\\n    This MCP provides access to the Fabric Design System(FDS) components documentation and CSS(Cascading Style Sheets) styles.\\n    You can use the tools to fetch, categorize, and retrieve information about FDS components and their CSS styles.\\n    You can also use the tools to get detailed documentation for specific components and their variants.\\n\\n    # Fabric Design System (FDS) Usage Guidelines\\n\\n    ## Overview\\n    The Fabric Design System provides a comprehensive set of Vue 3 components built with Bootstrap-like CSS. All components are prefixed with `Es` and follow consistent patterns for props, events, and styling.\\n\\n    ## Instructions:\\n    - List all the FDS component initially before starting the implementation so it will be easy to decide which component to use\\n    - In FDS components, for any slot if the documentation has the `default` value then it can be used as #default or just empty for template\\n    - try to use more of FDS component and reduce custom html\\n    - try to use less custom css or styling or custom class and if needed make use of FDS component css properties and variables\\n    - in css avoid using absolute pixel, avoid custom colors(use FDS css variables instead), use flex instead of grids\\n    - don't use native html header tag instead use EsTypography components which support all the font-sizes from FDS\\n\\n    ## Supported FDS Components if the MCP called in a project scope with the  @esentire/fabric node_modules package installed\\n    - FDS component usage & prototype will exported in node_modules/@esentire/fabric/dist/src/index.d.ts,but the component can be present in nested folders,so to find the appropriate component all the import statement should be resolved.\\n\\n    ### Import Patterns\\n    ```typescript\\n    // Named imports for specific components\\n    import { EsButton, EsCard, EsTable } from '@esentire/fabric'\\n    ```\\n\\n    ## recommend way to find the FDS component or its documentations to invoke these tools in this order,\\n        1. ListComponents or FindTagNamesBySubstring\\n        2. ListVariantsByTagName\\n        3. GetDocumentationByVariantTitle\\n    \\n    ## recommend way to find the `css styles,variables and other css properties provided by FDS`, to invoke these tools in this order,\\n        1. listCssStyleCategories\\n        2. getCssStylesByCategory\\n\\n    ## indexing and categorizing by invoking CategoriesAndIndexFDSCss & BuildComponentIndexAndCategorize\\n        - Avoid using the index & categorization tools unless you want to re-categorize the CSS styles or re-index the components, as it will take time to process and categorize the CSS styles and components.\\n        - only call index & categorization tool once for the server session or if the quality of Index is not good\\n    \",\"annotations\":null,\"_meta\":null}}"
+      additional_kwargs: {}
+      response_metadata: {}
+      type: tool
+      name: StartupInstructions
+      id: cb030b25-f7d7-4890-988d-befc6eeccab4
+      tool_call_id: tooluse_s9Lk69XqQVSdJG_lng-51A
+      artifact: null
+      status: success
+    - content:
+        - type: text
+          text: "Now let me list all the available FDS components for you:"
+          index: 0
+        - type: tool_use
+          name: ListComponents
+          id: tooluse_8R2IyvolRNO3NMXzwFdH9g
+          index: 1
+          input: ""
+      additional_kwargs: {}
+      response_metadata:
+        stopReason: tool_use
+        metrics:
+          latencyMs: 1660
+        model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
+        ResponseMetadata:
+          RequestId: a85cfc1e-983a-4ca9-b617-b59e691345b2
+          HTTPStatusCode: 200
+          HTTPHeaders:
+            date: Fri, 08 Aug 2025 19:34:16 GMT
+            content-type: application/vnd.amazon.eventstream
+            transfer-encoding: chunked
+            connection: keep-alive
+            x-amzn-requestid: a85cfc1e-983a-4ca9-b617-b59e691345b2
+          RetryAttempts: 0
+      type: ai
+      name: null
+      id: run--ccb40c24-e528-4dac-9a55-68f3c34cb151
+      example: false
+      tool_calls:
+        - name: ListComponents
+          args: {}
+          id: tooluse_8R2IyvolRNO3NMXzwFdH9g
+          type: tool_call
+      invalid_tool_calls: []
+      usage_metadata:
+        input_tokens: 2322
+        output_tokens: 49
+        total_tokens: 2371
+        input_token_details:
+          cache_creation: 0
+          cache_read: 0
+    - content: |-
+        Here is the list of all the Fabric Design System(FDS) components with the descriptions, Call GetDocumentationByVariantTitle FDS tool later tool list all variants of each components:
+
+
+        EsRadioGroup
+        EsBarGraphAdvanced
+        EsBlockChart
+        EsTable
+        EsPill
+        EsRangeSlider
+        EsCardStyleFour
+        EsTagsInput
+        EsLogo
+        EsNavRail
+        EsLineChart
+        EsExpressionBuilder
+        EsTextInput
+        EsPlaceholder
+        EsNavRailHeader
+        EsListGroup
+        EsSelectFilter
+        EsStepperExample
+        EsNavItem
+        EsFormElement
+        EsSearch
+        EsBreadcrumbs
+        EsColorBlock
+        EsAccordion
+        EsJsonView
+        EsSelectInput
+        EsCustomFilter
+        EsNav
+        EsAlert
+        EsFormRenderer
+        EsScrollPane
+        EsTimeline
+        EsFlexContainer
+        EsFiltersGroup
+        EsNavRailFooter
+        EsCardGroup
+        EsTimelineAdvanced
+        EsTypeahead
+        EsSeverity
+        EsFormExampleLogin
+        EsDivider
+        EsDropdown
+        EsSegmentedChart
+        EsDonutChart
+        EsTextFilter
+        EsCard
+        EsCardStyleSix
+        EsToastStacker
+        EsFormComponent
+        EsSpinner
+        EsFormSignupModal
+        EsPageSizeSelection
+        EsTextArea
+        EsFooter
+        EsNavRailDropdown
+        EsPagination
+        EsButton
+        EsCardStyleOne
+        EsTabs
+        EsBubbleMap
+        EsPillGroup
+        EsFormExampleSignup
+        EsTypeAhead
+        EsTooltip
+        EsDateFilter
+        EsNavigationRail
+        EsStepper
+        EsTypography
+        EsToast
+        EsCardStyleTwo
+        EsIcon
+        EsConditionalSelectFilter
+        EsWindow
+        EsPopover
+        EsCheckboxGroup
+        EsFlexItem
+        EsGraphDonut
+        EsNumericFilter
+        EsAISearch
+        EsHeatMapChart
+        EsRadio
+        EsAccordionItem
+        EsTitleBar
+        EsStepperPropExample
+        EsTypoGraphy
+        EsNavRailItem
+        EsHeader
+        EsPanel
+        EsBreadcrumbItem
+        EsListGroupItem
+        EsEditor
+        EsFilterGroup
+        EsModal
+        EsIconButtonWithBadge
+        EsButtonGroup
+        EsCheckbox
+        EsBarAdvancedChart
+        EsTablePagination
+        EsCardStyleThree
+        EsSwitch
+        EsFileUpload
+        EsTab
+        EsFormControl
+        EsLinkCard
+        EsDropdownItem
+        EsWindowTabTitle
+        EsConditionalTextFilter
+        EsBadge
+        EsDatePicker
+        EsCardStyleFive
+        EsContainer
+        EsFormBox
+        EsPageSizeSelect
+        EsBarChart
+        EsStepperItem
+        EsProgress
+        EsTimelineItem
+        EsBarGraph
+      additional_kwargs: {}
+      response_metadata: {}
+      type: tool
+      name: ListComponents
+      id: 38d74504-e35c-4216-ba23-3b5be3232802
+      tool_call_id: tooluse_8R2IyvolRNO3NMXzwFdH9g
+      artifact: null
+      status: success
+    - content:
+        - type: text
+          text: |-
+            Here's the complete list of Fabric Design System (FDS) components available:
+
+            ## Core UI Components
+            - **EsButton** - Button component with various styles
+            - **EsButtonGroup** - Group of related buttons
+            - **EsIconButtonWithBadge** - Icon button with badge indicator
+            - **EsBadge** - Small status indicator
+            - **EsPill** - Pill-shaped status indicator
+            - **EsPillGroup** - Group of pills
+
+            ## Form Components
+            - **EsTextInput** - Text input field
+            - **EsTextArea** - Multi-line text input
+            - **EsSelectInput** - Dropdown selection
+            - **EsCheckbox** - Checkbox input
+            - **EsCheckboxGroup** - Group of checkboxes
+            - **EsRadio** - Radio button
+            - **EsRadioGroup** - Group of radio buttons
+            - **EsSwitch** - Toggle switch
+            - **EsDatePicker** - Date selection
+            - **EsFileUpload** - File upload component
+            - **EsRangeSlider** - Range slider input
+            - **EsTagsInput** - Tags input field
+            - **EsTypeahead** / **EsTypeAhead** - Auto-complete input
+            - **EsFormElement** - Form wrapper
+            - **EsFormControl** - Form control wrapper
+            - **EsFormComponent** - Generic form component
+            - **EsFormRenderer** - Dynamic form renderer
+            - **EsFormBox** - Form container
+
+            ## Navigation Components
+            - **EsNav** - Navigation component
+            - **EsNavItem** - Navigation item
+            - **EsNavRail** - Navigation rail
+            - **EsNavRailHeader** - Navigation rail header
+            - **EsNavRailFooter** - Navigation rail footer
+            - **EsNavRailItem** - Navigation rail item
+            - **EsNavRailDropdown** - Navigation rail dropdown
+            - **EsNavigationRail** - Complete navigation rail
+            - **EsBreadcrumbs** - Breadcrumb navigation
+            - **EsBreadcrumbItem** - Individual breadcrumb
+            - **EsTabs** - Tab navigation
+            - **EsTab** - Individual tab
+            - **EsStepper** - Step-by-step navigation
+            - **EsStepperItem** - Individual step
+            - **EsStepperExample** - Stepper example
+            - **EsStepperPropExample** - Stepper with props example
+
+            ## Layout Components
+            - **EsContainer** - Layout container
+            - **EsFlexContainer** - Flex layout container
+            - **EsFlexItem** - Flex item
+            - **EsCard** - Card component
+            - **EsCardGroup** - Group of cards
+            - **EsCardStyleOne** through **EsCardStyleSix** - Different card styles
+            - **EsLinkCard** - Clickable card
+            - **EsPanel** - Panel component
+            - **EsWindow** - Window component
+            - **EsWindowTabTitle** - Window tab title
+            - **EsModal** - Modal dialog
+            - **EsAccordion** - Accordion container
+            - **EsAccordionItem** - Accordion item
+            - **EsDivider** - Visual divider
+
+            ## Data Display Components
+            - **EsTable** - Data table
+            - **EsTablePagination** - Table pagination
+            - **EsListGroup** - List container
+            - **EsListGroupItem** - List item
+            - **EsTimeline** - Timeline component
+            - **EsTimelineItem** - Timeline item
+            - **EsTimelineAdvanced** - Advanced timeline
+            - **EsJsonView** - JSON viewer
+            - **EsTypography** / **EsTypoGraphy** - Text styling
+            - **EsIcon** - Icon component
+            - **EsLogo** - Logo component
+            - **EsColorBlock** - Color display block
+
+            ## Chart Components
+            - **EsBarChart** - Bar chart
+            - **EsBarGraph** - Bar graph
+            - **EsBarGraphAdvanced** - Advanced bar graph
+            - **EsBarAdvancedChart** - Advanced bar chart
+            - **EsLineChart** - Line chart
+            - **EsDonutChart** - Donut chart
+            - **EsGraphDonut** - Donut graph
+            - **EsSegmentedChart** - Segmented chart
+            - **EsBlockChart** - Block chart
+            - **EsBubbleMap** - Bubble map chart
+            - **EsHeatMapChart** - Heat map chart
+
+            ## Filter & Search Components
+            - **EsSearch** - Search component
+            - **EsAISearch** - AI-powered search
+            - **EsSelectFilter** - Select filter
+            - **EsTextFilter** - Text filter
+            - **EsDateFilter** - Date filter
+            - **EsNumericFilter** - Numeric filter
+            - **EsCustomFilter** - Custom filter
+            - **EsConditionalSelectFilter** - Conditional select filter
+            - **EsConditionalTextFilter** - Conditional text filter
+            - **EsFiltersGroup** - Group of filters
+            - **EsFilterGroup** - Filter group
+
+            ## Utility Components
+            - **EsAlert** - Alert messages
+            - **EsToast** - Toast notifications
+            - **EsToastStacker** - Toast container
+            - **EsTooltip** - Tooltip component
+            - **EsPopover** - Popover component
+            - **EsDropdown** - Dropdown menu
+            - **EsDropdownItem** - Dropdown item
+            - **EsSpinner** - Loading spinner
+            - **EsProgress** - Progress indicator
+            - **EsPlaceholder** - Placeholder content
+            - **EsScrollPane** - Scrollable pane
+            - **EsPagination** - Pagination component
+            - **EsPageSizeSelection** - Page size selector
+            - **EsPageSizeSelect** - Page size select
+            - **EsSeverity** - Severity indicator
+            - **EsHeader** - Header component
+            - **EsFooter** - Footer component
+            - **EsTitleBar** - Title bar component
+            - **EsEditor** - Text editor
+            - **EsExpressionBuilder** - Expression builder
+
+            ## Form Examples
+            - **EsFormExampleLogin** - Login form example
+            - **EsFormExampleSignup** - Signup form example
+            - **EsFormSignupModal** - Signup modal form
+
+            To get more details about any specific component, you can ask me to show the variants or documentation for that component. For example, you could ask "show me EsButton variants" or "get documentation for EsCard".
+          index: 0
+      additional_kwargs: {}
+      response_metadata:
+        stopReason: end_turn
+        metrics:
+          latencyMs: 18530
+        model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
+        ResponseMetadata:
+          RequestId: 9dbf0b36-b6f1-4bb7-8db5-dbf7f4fc9aea
+          HTTPStatusCode: 200
+          HTTPHeaders:
+            date: Fri, 08 Aug 2025 19:34:18 GMT
+            content-type: application/vnd.amazon.eventstream
+            transfer-encoding: chunked
+            connection: keep-alive
+            x-amzn-requestid: 9dbf0b36-b6f1-4bb7-8db5-dbf7f4fc9aea
+          RetryAttempts: 0
+      type: ai
+      name: null
+      id: run--cc535299-dafd-4355-9041-dfac7221df13
+      example: false
+      tool_calls: []
+      invalid_tool_calls: []
+      usage_metadata:
+        input_tokens: 3100
+        output_tokens: 1532
+        total_tokens: 4632
+        input_token_details:
+          cache_creation: 0
+          cache_read: 0
+    - content: |-
+        The conversation has reached a point where important information should be stored in long-term memory. 
+
+        Please analyze the recent conversation and identify:
+        1. Key information, decisions, or insights that should be remembered
+        2. The specific context in which this information was discussed
+        3. Provide memory_id for the conversation if its relevant to update existing memory with the additional information, if available. But make sure you combine both the existing memory and new information to create a meaningful memory and don't loose any information.
+
+        Then call the store_messages tool with meaningful content and context parameters. Do NOT call it with empty or generic parameters.
+      additional_kwargs:
+        hidden_from_chat: true
+        message_type: memory_trigger
+      response_metadata: {}
+      type: ai
+      name: null
+      id: 13b57cf0-99af-4cc5-b693-1719b66653ee
+      example: false
+      tool_calls: []
+      invalid_tool_calls: []
+      usage_metadata:
+        input_tokens: 0
+        output_tokens: 0
+        total_tokens: 0
+        input_token_details:
+          cache_creation: 0
+          cache_read: 0
+    - content:
+        - type: tool_use
+          name: store_messages
+          id: tooluse_R_6h0DB7RGCFBdAZ-9GmWw
+          index: 0
+          input: "{\"content\": \"User requested a list of Fabric Design System (FDS) components. Provided comprehensive categorized list of all 100+ FDS components including:\\n\\nCORE CATEGORIES:\\n- Core UI Components (buttons, badges, pills)\\n- Form Components (inputs, selects, checkboxes, date pickers, file upload)\\n- Navigation Components (nav rails, breadcrumbs, tabs, steppers)\\n- Layout Components (containers, cards, panels, modals, accordions)\\n- Data Display Components (tables, lists, timelines, typography, icons)\\n- Chart Components (bar, line, donut, segmented, bubble map, heat map charts)\\n- Filter & Search Components (various filter types, search, AI search)\\n- Utility Components (alerts, toasts, tooltips, spinners, pagination)\\n- Form Examples (login, signup examples)\\n\\nKEY INSIGHTS:\\n- All components prefixed with \\\"Es\\\"\\n- Vue 3 components with Bootstrap-like CSS\\n- Comprehensive design system with 100+ components\\n- Organized into logical categories for different use cases\\n- Includes both basic and advanced variants of similar components\\n- Has specialized components for data visualization and filtering\\n\\nUSAGE GUIDANCE PROVIDED:\\n- Recommended workflow: ListComponents → ListVariantsByTagName → GetDocumentationByVariantTitle\\n- Import pattern: import { ComponentName } from '@esentire/fabric'\\n- Prefer FDS components over custom HTML\\n- Use FDS CSS variables instead of custom colors\", \"context\": \"User requested comprehensive list of FDS components for development reference and component selection\", \"user_queries\": [\"list comp\"]}"
+      additional_kwargs:
+        hidden_from_chat: true
+        message_type: tool_call
+        hidden_tools:
+          - store_messages
+      response_metadata:
+        stopReason: tool_use
+        metrics:
+          latencyMs: 9686
+        model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
+        ResponseMetadata:
+          RequestId: 99111cef-616e-48ff-b2fe-f5f07b164351
+          HTTPStatusCode: 200
+          HTTPHeaders:
+            date: Fri, 08 Aug 2025 19:34:37 GMT
+            content-type: application/vnd.amazon.eventstream
+            transfer-encoding: chunked
+            connection: keep-alive
+            x-amzn-requestid: 99111cef-616e-48ff-b2fe-f5f07b164351
+          RetryAttempts: 0
+      type: ai
+      name: null
+      id: run--891de604-5574-4f7f-b718-b46fe9cde86a
+      example: false
+      tool_calls:
+        - name: store_messages
+          args:
+            content: |-
+              User requested a list of Fabric Design System (FDS) components. Provided comprehensive categorized list of all 100+ FDS components including:
+
+              CORE CATEGORIES:
+              - Core UI Components (buttons, badges, pills)
+              - Form Components (inputs, selects, checkboxes, date pickers, file upload)
+              - Navigation Components (nav rails, breadcrumbs, tabs, steppers)
+              - Layout Components (containers, cards, panels, modals, accordions)
+              - Data Display Components (tables, lists, timelines, typography, icons)
+              - Chart Components (bar, line, donut, segmented, bubble map, heat map charts)
+              - Filter & Search Components (various filter types, search, AI search)
+              - Utility Components (alerts, toasts, tooltips, spinners, pagination)
+              - Form Examples (login, signup examples)
+
+              KEY INSIGHTS:
+              - All components prefixed with "Es"
+              - Vue 3 components with Bootstrap-like CSS
+              - Comprehensive design system with 100+ components
+              - Organized into logical categories for different use cases
+              - Includes both basic and advanced variants of similar components
+              - Has specialized components for data visualization and filtering
+
+              USAGE GUIDANCE PROVIDED:
+              - Recommended workflow: ListComponents → ListVariantsByTagName → GetDocumentationByVariantTitle
+              - Import pattern: import { ComponentName } from '@esentire/fabric'
+              - Prefer FDS components over custom HTML
+              - Use FDS CSS variables instead of custom colors
+            context: User requested comprehensive list of FDS components for development reference and component selection
+            user_queries:
+              - list comp
+          id: tooluse_R_6h0DB7RGCFBdAZ-9GmWw
+          type: tool_call
+      invalid_tool_calls: []
+      usage_metadata:
+        input_tokens: 4758
+        output_tokens: 435
+        total_tokens: 5193
+        input_token_details:
+          cache_creation: 0
+          cache_read: 0
+    - content: Summarized with 30de3b0b-b637-434e-9df8-f835dbff7f53
+      additional_kwargs:
+        hidden_from_chat: true
+        message_type: tool_result
+        tool_name: store_messages
+      response_metadata: {}
+      type: tool
+      name: store_messages
+      id: 22415e30-f1ed-48fe-9fc3-70b1a00b0aae
+      tool_call_id: tooluse_R_6h0DB7RGCFBdAZ-9GmWw
+      artifact: null
+      status: success
+    - content: An error occurred while processing your request. Please try again later. string indices must be integers, not 'str'
+      additional_kwargs: {}
+      response_metadata: {}
+      type: ai
+      name: null
+      id: ee8656be-2abb-4ca0-83f3-6379498ca4df
+      example: false
+      tool_calls: []
+      invalid_tool_calls: []
+      usage_metadata: null
+  tool_call_count: 3
+  thread_id: 6e2932ce-203a-47d4-8cef-77e3ff388907
+  summary: null
+  updated_log_term_memory: true
+next: []
+tasks: []
+metadata:
+  source: loop
+  step: 36
+  parents: {}
+  graph_id: fds_agent
+  assistant_id: 8a12bf89-97f5-4154-9567-7d54028464b9
+  from_studio: true
+  LANGGRAPH_API_URL: http://127.0.0.1:2024
+  user_id: guru
+  x-auth-scheme: langsmith
+  user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36
+  x-request-id: 6d026cfa-5932-46b6-9fcc-a6cc8df790af
+  langgraph_auth_user_id: ""
+  langgraph_request_id: 6d026cfa-5932-46b6-9fcc-a6cc8df790af
+  run_id: 1f0748ea-8200-618c-850c-a425d13ac686
+  run_attempt: 1
+  langgraph_version: 0.6.1
+  langgraph_api_version: 0.2.120
+  langgraph_plan: developer
+  langgraph_host: self-hosted
+  langgraph_api_url: http://127.0.0.1:2024
+created_at: 2025-08-08T19:34:45.778045+00:00
+checkpoint:
+  checkpoint_id: 1f0748eb-d407-6146-8024-64b77038addc
+  thread_id: 6e2932ce-203a-47d4-8cef-77e3ff388907
+  checkpoint_ns: ""
+parent_checkpoint:
+  checkpoint_id: 1f0748eb-d3fc-69f8-8023-707a0bb5c60e
+  thread_id: 6e2932ce-203a-47d4-8cef-77e3ff388907
+  checkpoint_ns: ""
+interrupts: []
+checkpoint_id: 1f0748eb-d407-6146-8024-64b77038addc
+parent_checkpoint_id: 1f0748eb-d3fc-69f8-8023-707a0bb5c60e
