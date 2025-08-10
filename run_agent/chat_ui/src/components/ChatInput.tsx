@@ -47,7 +47,7 @@ export function ChatInput({
           onClick={onSendMessage}
           disabled={!userInput.trim() || isRunning}
           style={{
-            background: userInput.trim() && !isRunning ? "#007acc" : "#ccc",
+            background: userInput.trim() ? "#349217ff" : !isRunning? "#eda62aff" : "#ccc",
             color: "white",
             border: "none",
             padding: "10px 20px",

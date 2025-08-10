@@ -1,0 +1,59 @@
+langgraph live tokens,
+
+events to cover,EventType.RAW, EventType.CUSTOM (for interrupt name=LangGraphEventTypes.OnInterrupt.value)EventType.RUN_ERROR,  STATE_SNAPSHOT, TOOL_CALL_START, TOOL_CALL_ARGS, TOOL_CALL_END
+TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END
+other events relatednto THINKING(not needed for now)
+
+
+event.data.chunk.content[0].type==null (mostly transitioning into a different type, mostly just a seperator)
+
+
+0. on Node start(we can get node name to debug) // RUN_STARTEDevent: on_chain_start
+event.data.input.messages[0].content
+event.metadata.langgraph_node
+
+1. Ai Text
+event: on_chat_model_stream
+event.data.chunk.content[0].type==“text”
+event.data.chunk.content[0].text
+event.data.chunk.type==“AIMessageChunk”
+event.data.chunk.id
+
+2. Propose Tool calls 
+event: on_chat_model_stream
+event.data.chunk.content[0].type==“tool_use”
+event.data.chunk.content[0].name
+event.data.chunk.content[0].id
+
+3. state snapshot text (finished, maybe only to collect usage metrics),  //STATE_SNAPSHOT event: on_chain_end 
+	— Below is the access to Agent state
+      	event.data.output.content[0].type==“text” / event.data.output.content[0].text
+     	event.data.output.content[1].type==“tool_use” / event.data.output.content[1].name
+	event.data.output.messages_history
+     	event.data.output.response_metadata.metrics.latencyMs
+      	event.data.output.usage_metadata.input_tokens
+     	event.data.output.usage_metadata.output_tokens
+
+4. text snapshot (finished, maybe only to collect usage metrics),  // MESSAGES_SNAPSHOTevent: on_chat_model_end 
+      event.data.output.content[0].type==“text” / event.data.output.content[0].text
+      event.data.output.content[1].type==“tool_use” / event.data.output.content[1].name	
+      event.data.output.response_metadata.metrics.latencyMs
+      event.data.output.usage_metadata.input_tokens
+     event.data.output.usage_metadata.output_tokens
+
+5. Tool call start  // TOOL_CALL_START
+	event: on_tool_start
+	event.data.input
+	event.name
+
+6. Tool call end
+	event: on_tool_end
+	event.data.output.type
+	event.data.output.content
+	event.data.output.name
+	event.data.output.tool_call_id
+	event.data.output.status
+
+7. Interrupt streamevent: on_chain_streamevent.data.chunk.__interrupt__
+
+8. Interrupt streamevent: on_chain_streamevent.data.chunk.__interrupt__

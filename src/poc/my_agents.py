@@ -403,7 +403,7 @@ class MyAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.max_tool_calls = 5
+        self.max_tool_calls = 3
         self.store = None
 
     def get_state(self, config:RunnableConfig) -> ChatState:

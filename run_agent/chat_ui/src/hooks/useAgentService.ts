@@ -620,7 +620,7 @@ export const useAgentService = (): UseAgentService => {
                   console.log("📋 Custom event received:", event.name);
                   if (event.name === "on_interrupt") {
                     try {
-                      const userChoice = await handleInterrupt(event.value);
+                      const userChoice = await handleInterrupt(event.value?.text ?? event.value);
                       console.log(`User responded: ${userChoice}`);
                       // Instead of recursively calling runWithInterruptHandling,
                       // let the current run continue by resolving the promise

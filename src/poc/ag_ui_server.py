@@ -32,6 +32,7 @@ from pydantic import  Field
 import json
 import uuid
 import traceback
+from  .lg_ag_ui import LangGraphToAgUi
 # Global agent instance
 
 # my_agent_instance:MyAgent=None
@@ -129,306 +130,43 @@ def state_history(request: Request, thread_id: Optional[str] = Query(None, descr
     config = {"configurable": {"thread_id": thread_id}}
     return agent.graph.get_state_history(config)
 
+import pickle
 
-async def handle_agent_events(my_agent: MyAgent, state: ChatState, config: RunnableConfig, encoder: EventEncoder):
+async def handle_agent_events(request: Request, my_agent: MyAgent, payload: ChatState | Command, config: RunnableConfig, encoder: EventEncoder):
     """
     Handle streaming events from the LangGraph agent and yield encoded events.
-    
-    Key improvements:
-    1. Sends raw events in parallel for full transparency 
-    2. Handles interrupt events by detecting on_custom_event with name="interrupt"
-    3. Detects interrupts both during streaming and after completion
-    4. Exits early on interrupt or error events
-    5. Uses both 'messages' and 'events' stream modes for comprehensive coverage
-    6. Properly implements TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END pattern
-    7. Correctly tracks and separates tool calls from text messages
     """
-    # Track message streaming state - separate tracking for tool calls and text messages
-    current_message_id = None
-    current_tool_call_id = None
-    message_type = None  # "text" or "tool_call"
-    interrupted = False
-
-    print("----- Starting handle_agent_events -----", state, json.dumps(config, indent=2, default=str))
-    
+    print("----- Starting handle_agent_events -----", payload, json.dumps(config, indent=2, default=str))
     try:
-        # Stream events from LangGraph using astream_events v2
-        async for event in my_agent.graph.astream_events(state, config, version="v2"):
-            print(f"---event type: {type(event)}")
-            print(f"---events: {json.dumps(event, default=str)}")
-            
-            # Send raw event in parallel - this provides full transparency
-            yield encoder.encode(RawEvent(
+        events_object = []
+        event_transformer = LangGraphToAgUi()
+        async for event in my_agent.graph.astream_events(payload, config, version="v2"):
+            # print(f"---event type: {type(event)}")
+            # print(f"---events: {json.dumps(event, default=str)}")
+            events_object.append(event)
+
+            if event.get("data",{}).get("input",{}) and isinstance(event.get("data",{}).get("input"),Command):
+                cmd:Command=event["data"]["input"]
+                event["data"]["input"]={"resume":cmd.resume}
+            if event.get("data") and event["data"].get("input") and event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
+                event["data"]["input"]["store"] = "Accessing to store information"
+            yield RawEvent(
                 type=EventType.RAW,
                 event=event,
-                source="langgraph"
-            ))
-            
-            # Extract event type and data from LangGraph event structure
-            event_type = event.get("event")
-            event_data = event.get("data", {})
-            event_name = event.get("name")
-            
-            # Handle chat model streaming events
-            if event_type == "on_chat_model_stream":
-                chunk = event_data.get("chunk")
-                if not chunk:
-                    continue
-                
-                # Check if this is a tool call chunk
-                tool_call_chunks = getattr(chunk, 'tool_call_chunks', [])
-                tool_call_data = tool_call_chunks[0] if tool_call_chunks else None
-                
-                # Handle tool call events
-                if tool_call_data:
-                    tool_call_id = tool_call_data.get("id")
-                    tool_call_name = tool_call_data.get("name")
-                    tool_call_args = tool_call_data.get("args")
-                    
-                    # If we were streaming a text message, end it first
-                    if message_type == "text" and current_message_id:
-                        yield encoder.encode(TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=current_message_id
-                        ))
-                        current_message_id = None
-                        message_type = None
-                    
-                    # Start new tool call if we have a name and no current tool call
-                    if tool_call_name and not current_tool_call_id:
-                        current_tool_call_id = tool_call_id or str(uuid.uuid4())
-                        message_type = "tool_call"
-                        
-                        yield encoder.encode(ToolCallStartEvent(
-                            type=EventType.TOOL_CALL_START,
-                            tool_call_id=current_tool_call_id,
-                            tool_call_name=tool_call_name,
-                            parent_message_id=getattr(chunk, 'id', None)
-                        ))
-                    
-                    # Stream tool call arguments if we have an active tool call
-                    elif tool_call_args and current_tool_call_id and message_type == "tool_call":
-                        yield encoder.encode(ToolCallArgsEvent(
-                            type=EventType.TOOL_CALL_ARGS,
-                            tool_call_id=current_tool_call_id,
-                            delta=tool_call_args
-                        ))
-                
-                # Handle text content streaming
-                elif hasattr(chunk, 'content') and chunk.content:
-                    # If we were in a tool call, end it first
-                    if message_type == "tool_call" and current_tool_call_id:
-                        yield encoder.encode(ToolCallEndEvent(
-                            type=EventType.TOOL_CALL_END,
-                            tool_call_id=current_tool_call_id
-                        ))
-                        current_tool_call_id = None
-                        message_type = None
-                    
-                    # Start text message if not already started
-                    if not current_message_id or message_type != "text":
-                        current_message_id = getattr(chunk, 'id', None) or str(uuid.uuid4())
-                        message_type = "text"
-                        
-                        # Send TEXT_MESSAGE_START event
-                        yield encoder.encode(TextMessageStartEvent(
-                            type=EventType.TEXT_MESSAGE_START,
-                            message_id=current_message_id,
-                            role="assistant"
-                        ))
-                    
-                    # Stream content if available
-                    if current_message_id and message_type == "text":
-                        # Extract text content from the message
-                        content_text = ""
-                        if isinstance(chunk.content, str):
-                            content_text = chunk.content
-                        elif isinstance(chunk.content, list):
-                            for content_block in chunk.content:
-                                if isinstance(content_block, dict) and content_block.get("type") == "text":
-                                    content_text += content_block.get("text", "")
-                                elif isinstance(content_block, str):
-                                    content_text += content_block
-                        
-                        if content_text:
-                            yield encoder.encode(TextMessageContentEvent(
-                                type=EventType.TEXT_MESSAGE_CONTENT,
-                                message_id=current_message_id,
-                                delta=content_text
-                            ))
-            
-            # Handle chat model end events
-            elif event_type == "on_chat_model_end":
-                # End any ongoing message or tool call
-                if message_type == "tool_call" and current_tool_call_id:
-                    yield encoder.encode(ToolCallEndEvent(
-                        type=EventType.TOOL_CALL_END,
-                        tool_call_id=current_tool_call_id
-                    ))
-                    current_tool_call_id = None
-                    message_type = None
-                elif message_type == "text" and current_message_id:
-                    yield encoder.encode(TextMessageEndEvent(
-                        type=EventType.TEXT_MESSAGE_END,
-                        message_id=current_message_id
-                    ))
-                    current_message_id = None
-                    message_type = None
-            
-            # Handle tool start and end events (separate from chat model events)
-            elif event_type == "on_tool_start":
-                tool_name = event_name
-                if tool_name:
-                    # End any ongoing message first
-                    if message_type == "text" and current_message_id:
-                        yield encoder.encode(TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=current_message_id
-                        ))
-                        current_message_id = None
-                        message_type = None
-                    
-                    # Start new tool call if not already in one
-                    if not current_tool_call_id:
-                        current_tool_call_id = str(uuid.uuid4())
-                        message_type = "tool_call"
-                        yield encoder.encode(ToolCallStartEvent(
-                            type=EventType.TOOL_CALL_START,
-                            tool_call_id=current_tool_call_id,
-                            tool_call_name=tool_name,
-                            parent_message_id=None
-                        ))
-            
-            elif event_type == "on_tool_end":
-                # End tool call if we have one active
-                if message_type == "tool_call" and current_tool_call_id:
-                    yield encoder.encode(ToolCallEndEvent(
-                        type=EventType.TOOL_CALL_END,
-                        tool_call_id=current_tool_call_id
-                    ))
-                    current_tool_call_id = None
-                    message_type = None
-            
-            # Handle custom events for interrupts
-            elif event_type == "on_custom_event":
-                # Check for interrupt events
-                if event_name == "interrupt":
-                    interrupted = True
-                    
-                    # End any ongoing message or tool call before sending interrupt
-                    if message_type == "tool_call" and current_tool_call_id:
-                        yield encoder.encode(ToolCallEndEvent(
-                            type=EventType.TOOL_CALL_END,
-                            tool_call_id=current_tool_call_id
-                        ))
-                        current_tool_call_id = None
-                        message_type = None
-                    elif message_type == "text" and current_message_id:
-                        yield encoder.encode(TextMessageEndEvent(
-                            type=EventType.TEXT_MESSAGE_END,
-                            message_id=current_message_id
-                        ))
-                        current_message_id = None
-                        message_type = None
-                    
-                    # Send interrupt event
-                    yield encoder.encode(CustomEvent(
-                        type=EventType.CUSTOM,
-                        name="on_interrupt",
-                        value=json.dumps(event_data) if event_data else "{}"
-                    ))
-                    
-                    # Exit the stream early on interrupt
-                    break
-            
-            # Handle error events
-            elif event_type == "error":
-                # End any ongoing message or tool call before sending error
-                if message_type == "tool_call" and current_tool_call_id:
-                    yield encoder.encode(ToolCallEndEvent(
-                        type=EventType.TOOL_CALL_END,
-                        tool_call_id=current_tool_call_id
-                    ))
-                    current_tool_call_id = None
-                    message_type = None
-                elif message_type == "text" and current_message_id:
-                    yield encoder.encode(TextMessageEndEvent(
-                        type=EventType.TEXT_MESSAGE_END,
-                        message_id=current_message_id
-                    ))
-                    current_message_id = None
-                    message_type = None
-                
-                # Send RUN_ERROR and set interrupted flag to prevent RUN_FINISHED
-                yield encoder.encode(RunErrorEvent(
-                    type=EventType.RUN_ERROR,
-                    message=event_data.get("message", "Unknown error")
-                ))
-                interrupted = True
-                break
-        
-        # End any ongoing message or tool call if stream completed normally
-        if not interrupted:
-            if message_type == "tool_call" and current_tool_call_id:
-                yield encoder.encode(ToolCallEndEvent(
-                    type=EventType.TOOL_CALL_END,
-                    tool_call_id=current_tool_call_id
-                ))
-            elif message_type == "text" and current_message_id:
-                yield encoder.encode(TextMessageEndEvent(
-                    type=EventType.TEXT_MESSAGE_END,
-                    message_id=current_message_id
-                ))
-        
-        # Check for interrupts after stream ends (if not already interrupted)
-        if not interrupted:
-            try:
-                final_state = await my_agent.graph.aget_state(config)
-                tasks = final_state.tasks if len(final_state.tasks) > 0 else None
-                interrupts = tasks[0].interrupts if tasks else []
-                
-                if interrupts:
-                    interrupted = True
-                    for interrupt in interrupts:
-                        yield encoder.encode(CustomEvent(
-                            type=EventType.CUSTOM,
-                            name="on_interrupt", 
-                            value=json.dumps(interrupt.value) if not isinstance(interrupt.value, str) else interrupt.value
-                        ))
-            except Exception as e:
-                print(f"Error checking for interrupts: {e}")
-                
+            )
+
+            async for transformed_event in event_transformer.transform_events(event):
+                if transformed_event:
+                    yield transformed_event           
+        yield event_transformer.end_events()             
     except Exception as e:
         print(f"Error in handle_agent_events: {e}", e)
         traceback.print_exc()
         traceback.print_stack()
-        
-        # End any ongoing message or tool call before sending error
-        if message_type == "tool_call" and current_tool_call_id:
-            yield encoder.encode(ToolCallEndEvent(
-                type=EventType.TOOL_CALL_END,
-                tool_call_id=current_tool_call_id
-            ))
-        elif message_type == "text" and current_message_id:
-            yield encoder.encode(TextMessageEndEvent(
-                type=EventType.TEXT_MESSAGE_END,
-                message_id=current_message_id
-            ))
-        
-        # Send RUN_ERROR and set interrupted flag to prevent RUN_FINISHED from being sent later
-        try:
-            error_event = RunErrorEvent(
-                type=EventType.RUN_ERROR,
-                message=str(e)
-            )
-            yield encoder.encode(error_event)
-        except Exception as encode_error:
-            print(f"Failed to encode RUN_ERROR event: {encode_error}")
-        
-        # Return immediately after sending RUN_ERROR
-        return
+        import pdb; pdb.set_trace()
 
-
+    with open("all_events.pkl", "wb") as file:
+        pickle.dump(events_object, file)
     print("----- Ending handle_agent_events -----")
 
 @app.post("/ag-ui/")
@@ -462,9 +200,16 @@ async def endpoint(input_data: RunAgentInputExtended, request: Request):
             # Process through agent
             # my_agent.state['messages'].append(human_msgs[-1])
 
+            command: Command = None
             state: ChatState = ChatState(
                 messages=human_msgs,
             )
+
+            if input_data.forwarded_props.get("command"):
+                command = Command(
+                    resume=input_data.forwarded_props["command"].get("resume",""),
+                )
+
 
             print("-----gen------")
 
@@ -472,18 +217,18 @@ async def endpoint(input_data: RunAgentInputExtended, request: Request):
             run_error_detected = False
             
             # Handle agent events using the separate function
-            async for event_data in handle_agent_events(my_agent, state, config, encoder):
+            async for event_data in handle_agent_events(request, my_agent, command if command else state, config, encoder):
                 # Check if this is a RUN_ERROR event before yielding it
-                try:
-                    event_str = event_data.decode() if hasattr(event_data, 'decode') else str(event_data)
-                    if '"type":"RUN_ERROR"' in event_str:
-                        run_error_detected = True
-                        print("RUN_ERROR detected, will not send RUN_FINISHED")
-                except Exception as e:
-                    print(f"Error checking event data: {e}")
-                
-                yield event_data
-            
+                # try:
+                #     event_str = event_data.decode() if hasattr(event_data, 'decode') else str(event_data)
+                #     if '"type":"RUN_ERROR"' in event_str:
+                #         run_error_detected = True
+                #         print("RUN_ERROR detected, will not send RUN_FINISHED")
+                # except Exception as e:
+                #     print(f"Error checking event data: {e}")
+
+                yield encoder.encode(event_data)
+
             # Only send RUN_FINISHED if no RUN_ERROR was detected
             if not run_error_detected:
                 try:

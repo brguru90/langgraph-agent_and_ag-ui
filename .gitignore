@@ -31,3 +31,8 @@ graph_data.sqlite-x-writes-290-value.bin
 graph_studio_data.sqlite-x-writes-217-value.bin
 store_data.sqlite
 .ipynb_checkpoints
+all_events copy.pkl
+filtered_data.json
+final_events.json
+final_events2.json
+original_events.json
