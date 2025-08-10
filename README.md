@@ -1,13 +1,23 @@
 ```
 aws sso login --profile llm-sandbox   
-aws bedrock list-inference-profiles 
+aws bedrock list-inference-profiles
+uv sync
 ```
 
 # command to run the Agent debug server(LangGraph Studio)
 `bash fds_dev.sh`
+<img width="907" height="593" alt="image" src="https://github.com/user-attachments/assets/e7d98f8d-5fba-434e-adbd-8683ff350710" />
+<img width="1490" height="710" alt="image" src="https://github.com/user-attachments/assets/09829852-b1ed-487e-8512-7474816067f2" />
+<img width="891" height="653" alt="image" src="https://github.com/user-attachments/assets/0fd732ae-9ac8-416a-a8d8-5f7b8516c883" />
 
-# command to run the Agent server
-`uv run fds-server`
+
+
+
+
+# command to run the Agent server (Langraph events server through APIs to interact with the React ui)
+```uv run fds-server
+```
+<img width="3024" height="22285" alt="screencapture-localhost-5173-2025-08-11-03_38_44" src="https://github.com/user-attachments/assets/2d9c69cd-46d7-4ec3-b3d2-7166edc997bf" />
 
 # command to run the Agent cli
 `fds-cli`
@@ -17,6 +27,8 @@ aws bedrock list-inference-profiles
 
 # React ui
 run_agent/chat_ui
+```cd run_agent/chat_ui && npm run dev
+```
 
 <!-- 
 
