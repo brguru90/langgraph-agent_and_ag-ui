@@ -157,7 +157,8 @@ function handleInterrupt(message) {
   });
 }
 
-async function runAgent(content, thread_id) {
+async function runAgent(content, thread_id,userId="guru") {
+  
   const agent = await (async () => {
     if (!thread_id) {
       return new HttpAgent({
@@ -170,8 +171,8 @@ async function runAgent(content, thread_id) {
       url: `http://localhost:8000/ag-ui/`,
       // debug: true,
       threadId: thread_id,
-      initialState: state,
-      initialMessages: mapStateMessagesToAGUI(state.messages),
+      // initialState: state,
+      // initialMessages: mapStateMessagesToAGUI(state.messages),
     });
   })();
 
@@ -259,12 +260,13 @@ async function runAgent(content, thread_id) {
             console.log("📋 Custom event received:", event.name);
             if (event.name === "on_interrupt") {
               try {
-                const userChoice = await handleInterrupt(event.value);
+                const userChoice = await handleInterrupt(event.value?.text ?? event.value);
                 console.log(`User responded: ${userChoice}`);
                 // Resume with the user's choice using the same agent instance
                 const resumeRunData = {
                   runId: originalRunId, // Keep the same runId
                   forwardedProps: {
+                    user_id:userId,
                     command: {
                       resume: userChoice,
                     },
@@ -338,7 +340,9 @@ async function runAgent(content, thread_id) {
   try {
     await runWithInterruptHandling({
       runId: originalRunId,
-      // Don't explicitly pass threadId initially - let agent manage it
+      forwardedProps:{
+        user_id:userId,
+      }
     });
 
     console.log("✅ Execution completed successfully.");
@@ -352,7 +356,7 @@ async function main() {
   const lastAgent = await runAgent(
     "provide me documentation for button component"
   );
-  console.log(lastAgent.threadId);
+  console.log("----- second turn", lastAgent.threadId);
   // fs.writeFileSync("state.json", JSON.stringify(lastAgent));
   // // fs.writeFileSync("messages.json", JSON.stringify(lastAgent.messages));
   await runAgent(

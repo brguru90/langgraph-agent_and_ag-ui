@@ -216,7 +216,6 @@ class ChatState(TypedDict):
     tool_call_count: int
     thread_id: str 
     summary:RunningSummary | None
-    last_store_id: str | None
     updated_log_term_memory: bool
     messages_history: List[BaseMessage]
 

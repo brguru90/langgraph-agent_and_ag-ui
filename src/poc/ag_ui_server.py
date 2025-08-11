@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from typing import List,TypedDict,Any,Optional
 from typing_extensions import NotRequired
 from .my_agents import MyAgent,ChatState  # Import your agent definition
-from .patched_langgraph_agent import PatchedLangGraphAgent as LangGraphAgent,add_langgraph_fastapi_endpoint
+# from .patched_langgraph_agent import PatchedLangGraphAgent as LangGraphAgent,add_langgraph_fastapi_endpoint
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -12,20 +12,12 @@ from ag_ui.core.events import (
     RunStartedEvent, 
     RunFinishedEvent, 
     RunErrorEvent,
-    TextMessageStartEvent,
-    TextMessageEndEvent,
-    TextMessageContentEvent,
-    ToolCallStartEvent,
-    ToolCallEndEvent,
-    ToolCallArgsEvent,
     RawEvent,
-    CustomEvent
 )
 from ag_ui.encoder import EventEncoder
-from langchain_core.messages import HumanMessage, AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command,Send
-from collections.abc import Hashable, Sequence
+from langgraph.types import Command
 from fastapi import Request
 from fastapi import FastAPI, Request, Query
 from pydantic import  Field
@@ -33,17 +25,12 @@ import json
 import uuid
 import traceback
 from  .lg_ag_ui import LangGraphToAgUi
-# Global agent instance
-
-# my_agent_instance:MyAgent=None
-
+import pickle
 
 class CommandType(TypedDict):
     # update: Any | None = None
     resume: dict[str, Any] | Any | None = None
     node_name: NotRequired[Optional[str]] # goto
-
-
 class ForwardProps(TypedDict):
     command: NotRequired[Optional[CommandType]]=None
     user_id: str
@@ -52,11 +39,8 @@ class RunAgentInputExtended(RunAgentInput):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic here
-    print("✅ Application startup logic")
-    # global my_agent_instance
-    
-    # Initialize agent once and keep it alive
+    print("✅ Application started")
+
     my_agent_instance:MyAgent=None
     if not my_agent_instance:
         my_agent_instance = MyAgent()
@@ -67,9 +51,9 @@ async def lifespan(app: FastAPI):
     # agent = LangGraphAgent(
     #     name="fds_documentation_explorer",
     #     description="Agent to explore Fabric Design System documentations.",
-    #     graph=my_agent_instance.graph,
-        
+    #     graph=my_agent_instance.graph,        
     # )
+
     # add_langgraph_fastapi_endpoint(
     #     app=app,
     #     agent=agent,
@@ -87,8 +71,6 @@ async def lifespan(app: FastAPI):
     if my_agent_instance:
         await my_agent_instance.close()
 
-
-
 app = FastAPI(lifespan=lifespan,debug=True)
 
 app.add_middleware(
@@ -98,7 +80,6 @@ app.add_middleware(
     allow_methods=["*"],       # Allow all HTTP methods, including OPTIONS
     allow_headers=["*"],       # Allow all headers
 )
-
 
 def add_missing_ids(config:RunnableConfig,agent:MyAgent):
     state=agent.get_state(config)
@@ -130,12 +111,7 @@ def state_history(request: Request, thread_id: Optional[str] = Query(None, descr
     config = {"configurable": {"thread_id": thread_id}}
     return agent.graph.get_state_history(config)
 
-import pickle
-
 async def handle_agent_events(request: Request, my_agent: MyAgent, payload: ChatState | Command, config: RunnableConfig, encoder: EventEncoder):
-    """
-    Handle streaming events from the LangGraph agent and yield encoded events.
-    """
     print("----- Starting handle_agent_events -----", payload, json.dumps(config, indent=2, default=str))
     try:
         events_object = []
@@ -143,7 +119,7 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
         async for event in my_agent.graph.astream_events(payload, config, version="v2"):
             # print(f"---event type: {type(event)}")
             # print(f"---events: {json.dumps(event, default=str)}")
-            events_object.append(event)
+            events_object.append(event) # for debugging later
 
             if event.get("data",{}).get("input",{}) and isinstance(event.get("data",{}).get("input"),Command):
                 cmd:Command=event["data"]["input"]
@@ -154,11 +130,11 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
                 type=EventType.RAW,
                 event=event,
             )
-
             async for transformed_event in event_transformer.transform_events(event):
                 if transformed_event:
                     yield transformed_event           
-        yield event_transformer.end_events()             
+        yield event_transformer.end_events()      
+               
     except Exception as e:
         print(f"Error in handle_agent_events: {e}", e)
         traceback.print_exc()
@@ -186,19 +162,14 @@ async def endpoint(input_data: RunAgentInputExtended, request: Request):
 
     async def gen():
         try:
-            # Send run started event
             yield encoder.encode(RunStartedEvent(
                 type=EventType.RUN_STARTED,
                 thread_id=input_data.thread_id,
                 run_id=input_data.run_id
             ))
             
-            # print(f"input_data: {[m for m in input_data.messages]}")
             user_msgs: List[UserMessage] = input_data.messages
             human_msgs = [HumanMessage(content=m.content,id=str(uuid.uuid4())) for m in user_msgs]
-            
-            # Process through agent
-            # my_agent.state['messages'].append(human_msgs[-1])
 
             command: Command = None
             state: ChatState = ChatState(
@@ -210,55 +181,23 @@ async def endpoint(input_data: RunAgentInputExtended, request: Request):
                     resume=input_data.forwarded_props["command"].get("resume",""),
                 )
 
-
-            print("-----gen------")
-
-            # Track if a RUN_ERROR event was sent
-            run_error_detected = False
-            
-            # Handle agent events using the separate function
             async for event_data in handle_agent_events(request, my_agent, command if command else state, config, encoder):
-                # Check if this is a RUN_ERROR event before yielding it
-                # try:
-                #     event_str = event_data.decode() if hasattr(event_data, 'decode') else str(event_data)
-                #     if '"type":"RUN_ERROR"' in event_str:
-                #         run_error_detected = True
-                #         print("RUN_ERROR detected, will not send RUN_FINISHED")
-                # except Exception as e:
-                #     print(f"Error checking event data: {e}")
-
                 yield encoder.encode(event_data)
 
-            # Only send RUN_FINISHED if no RUN_ERROR was detected
-            if not run_error_detected:
-                try:
-                    yield encoder.encode(RunFinishedEvent(
-                        type=EventType.RUN_FINISHED,
-                        thread_id=input_data.thread_id,
-                        run_id=input_data.run_id
-                    ))
-                except Exception as e:
-                    print(f"Error sending RUN_FINISHED: {e}")
-                    # Don't try to send another RUN_ERROR here as that could cause more problems
+            yield encoder.encode(RunFinishedEvent(
+                type=EventType.RUN_FINISHED,
+                thread_id=input_data.thread_id,
+                run_id=input_data.run_id
+            ))
             
         except Exception as error:
             print(f"Error in agent processing: {error}")
             traceback.print_exc()
-            
-            # Only send RUN_ERROR if no RUN_ERROR was already detected
-            if not run_error_detected:
-                try:
-                    # Send RUN_ERROR event but don't send RUN_FINISHED afterward
-                    yield encoder.encode(RunErrorEvent(
-                        type=EventType.RUN_ERROR,
-                        message=str(error)
-                    ))
-                except Exception as e:
-                    print(f"Error sending RUN_ERROR: {e}")
-            
-            # Exit generator early to avoid sending RUN_FINISHED after an error
-            return
-        print("-----")
+
+            yield encoder.encode(RunErrorEvent(
+                type=EventType.RUN_ERROR,
+                message=str(error)
+            ))
 
     return StreamingResponse(gen(), media_type=encoder.get_content_type())
 
