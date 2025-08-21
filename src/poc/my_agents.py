@@ -2,6 +2,7 @@ import asyncio,json
 from typing import Annotated, NotRequired,Dict,Optional,Any
 from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from typing import TypedDict, Literal,List
+from langchain_ollama import ChatOllama
 from langchain_aws import ChatBedrockConverse
 from langchain_core.tools import tool
 from langchain_core import messages
@@ -26,9 +27,13 @@ from langgraph.checkpoint.base import Checkpoint, BaseCheckpointSaver
 from langchain_core.prompts.chat import ChatPromptTemplate, ChatPromptValue
 from langchain_core.messages.utils import get_buffer_string
 from langgraph.store.base import BaseStore,SearchItem
-from langgraph.store.sqlite import SqliteStore
-import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.store.sqlite import AsyncSqliteStore
+from langgraph.store.redis import AsyncRedisStore
+from langgraph.store.base import IndexConfig
+from langchain_aws import BedrockEmbeddings
+import sqlite3
+import aiosqlite
 import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -78,6 +83,18 @@ def get_aws_modal():
         temperature=0.0,
         max_tokens=max_tokens,         
     )
+    # return ChatOllama(
+    #     model="llama3.2",
+    #     base_url="http://192.168.3.104:11434"
+    # )
+
+def get_aws_embed_model():
+    return BedrockEmbeddings(
+        model_id="amazon.titan-embed-text-v2:0",
+        region_name="us-west-2",
+        credentials_profile_name="llm-sandbox"
+    )
+
 
 class AsyncSqliteSaverWrapper(BaseCheckpointSaver):
     """
@@ -258,6 +275,7 @@ async def query_memories(
     # print("\n--------- namespace -------------",namespace)
     memories = await store.asearch(namespace, query=query, limit=record_limit, offset=record_offset)
     formatted = "\n".join(f"[{mem.key}]: {mem.value} (similarity: {mem.score})" for mem in memories)
+    print("\n\n----------memories----------",namespace,formatted,end="\n\n")
     if formatted:
         return f"""
 <memories>
@@ -402,8 +420,8 @@ class MyAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.max_tool_calls = 3
-        self.store = None
+        self.max_tool_calls = 6
+        self.store:AsyncRedisStore | AsyncSqliteStore| BaseStore = None
 
     def get_state(self, config:RunnableConfig) -> ChatState:
         """Get the current state of the agent"""
@@ -616,16 +634,24 @@ Then call the store_messages tool with meaningful content and context parameters
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
         """Handle any cleanup before conversation ends"""
 
-        if not state.get("updated_log_term_memory",False) and self.decide_store_messages(state, config, store,True):
-            state["updated_log_term_memory"] = True
-            return Command(
-                update=state,
-                goto="llm"
-            )
+        # if not state.get("updated_log_term_memory",False) and self.decide_store_messages(state, config, store,True):
+        #     state["updated_log_term_memory"] = True
+        #     return Command(
+        #         update=state,
+        #         goto="llm"
+        #     )
 
-        if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
-            self.sql_lite_conn.commit() 
-            self.store_conn.commit()  
+        # if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
+        #     self.sql_lite_conn.commit() 
+        #     self.store_conn.commit()  
+
+
+        self.decide_store_messages(state, config, store,True)
+        msg = await self.llm.bind_tools([store_messages]).ainvoke(state["messages"])
+        tool_res=await self.tool_node.ainvoke({"messages": state["messages"] + [msg]})
+
+        print("\n\n-----before stop-------\n",type(store),store,json.dumps([msg,tool_res],default=str,indent=2),end="\n\n")
+
         
         # Return command to route to END node
         return Command(
@@ -846,6 +872,7 @@ Then call the store_messages tool with meaningful content and context parameters
         builder.add_node('route', self.route_node)
         # builder.add_node('summarizer', summarization_node)
         builder.add_node('end_conv', self.before_conversation_end)
+        
 
         # builder.add_edge(START, 'start_conv')
         builder.set_entry_point('start_conv')
@@ -869,10 +896,18 @@ Then call the store_messages tool with meaningful content and context parameters
         self.checkpointer = AsyncSqliteSaverWrapper(sqlite_saver, max_workers=4)
         
         # Initialize SQLite store for long-term memory
-        store_sql_file = sql_file.replace("graph_data.sqlite", "store_data.sqlite").replace("graph_studio_data.sqlite", "store_studio_data.sqlite")
-        self.store_conn = sqlite3.connect(store_sql_file, check_same_thread=False)
-        self.store = SqliteStore(self.store_conn)
-        
+        # store_sql_file = sql_file.replace("graph_data.sqlite", "store_data.sqlite").replace("graph_studio_data.sqlite", "store_studio_data.sqlite")
+        # self.store_conn = await aiosqlite.connect(store_sql_file, check_same_thread=False)
+        # self.store = AsyncSqliteStore(self.store_conn)
+        # await self.store.setup()
+
+        # index_config:IndexConfig = IndexConfig(embed=get_aws_embed_model(),dims=1536) # vector search not working
+        # self.redis_ctx= AsyncRedisStore.from_conn_string("redis://localhost:6379",index=index_config)
+        self.redis_ctx= AsyncRedisStore.from_conn_string("redis://localhost:6379")
+        self.store =await self.redis_ctx.__aenter__()
+        await self.store.setup()
+        await self.store.aput(("test"),"test_key",{"value": "dummy"})
+
         self._base_graph = builder.compile(checkpointer=self.checkpointer, store=self.store, debug=False, name="fds_agent")
 
         # Create the graph with listeners for actual execution
@@ -913,13 +948,15 @@ Then call the store_messages tool with meaningful content and context parameters
                     self.sql_lite_conn.close()
                 except Exception as e:
                     print(f"Error closing SQLite connection: {e}")
-            
-            if self.store_conn:
-                try:
-                    print("Closing Store SqlLite Conn...")
-                    self.store_conn.close()
-                except Exception as e:
-                    print(f"Error closing store SQLite connection: {e}")
+            # if self.redis_ctx:
+            #     self.redis_ctx.__aexit__(None, None, None)
+
+            # if self.store_conn:
+            #     try:
+            #         print("Closing Store SqlLite Conn...")
+            #         self.store_conn.close()
+            #     except Exception as e:
+            #         print(f"Error closing store SQLite connection: {e}")
             
             # Close client session first
             if self.client_session_ctx:

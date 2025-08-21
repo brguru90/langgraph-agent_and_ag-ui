@@ -43,6 +43,8 @@ async def create_graph(config:RunnableConfig):
     def patch(update:Dict):
         # this langgraph studio overrides its owen memory checkpointer, to override it again with patched value
         update["checkpointer"] = _agent.checkpointer
+        update["store"]=_agent.store
+        print("\n------------ override ------------ ", update)
         return update
     
     if _agent is None:

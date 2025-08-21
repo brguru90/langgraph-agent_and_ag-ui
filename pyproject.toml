@@ -25,6 +25,9 @@ dependencies = [
     "langgraph-cli[inmem]>=0.3.6",
     "langgraph-checkpoint-sqlite>=2.0.11",
     "aiosqlite>=0.21.0",
+    "langchain-ollama>=0.3.6",
+    "langgraph-checkpoint-redis>=0.1.1",
+    "dill>=0.4.0",
 ]
 
 [project.scripts]

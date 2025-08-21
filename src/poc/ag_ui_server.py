@@ -25,7 +25,8 @@ import json
 import uuid
 import traceback
 from  .lg_ag_ui import LangGraphToAgUi
-import pickle
+import pickle 
+import tempfile
 
 class CommandType(TypedDict):
     # update: Any | None = None
@@ -119,18 +120,33 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
         async for event in my_agent.graph.astream_events(payload, config, version="v2"):
             # print(f"---event type: {type(event)}")
             # print(f"---events: {json.dumps(event, default=str)}")
-            events_object.append(event) # for debugging later
+            events_object.append(event)  
+            __event=event         
 
             if event.get("data",{}).get("input",{}) and isinstance(event.get("data",{}).get("input"),Command):
                 cmd:Command=event["data"]["input"]
-                event["data"]["input"]={"resume":cmd.resume}
-            if event.get("data") and event["data"].get("input") and event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
-                event["data"]["input"]["store"] = "Accessing to store information"
+                # event["data"]["input"]={"resume":cmd.resume}
+                __event={
+                    **event,
+                    "data":{
+                        **event["data"],
+                        "input":{"resume":cmd.resume}
+                    }
+                }
+            if __event.get("data") and __event["data"].get("input") and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
+                # event["data"]["input"]["store"] = "Accessing to store information"
+                __event={
+                    **__event,
+                    "data":{
+                        **__event["data"],
+                        "input":{"store":"Accessing to store information"}
+                    }
+                }
             yield RawEvent(
                 type=EventType.RAW,
-                event=event,
+                event=__event,
             )
-            async for transformed_event in event_transformer.transform_events(event):
+            async for transformed_event in event_transformer.transform_events(__event):
                 if transformed_event:
                     yield transformed_event           
         yield event_transformer.end_events()      
@@ -142,7 +158,15 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
         import pdb; pdb.set_trace()
 
     with open("all_events.pkl", "wb") as file:
-        pickle.dump(events_object, file)
+        temp_file = tempfile.TemporaryFile()
+        final_event_objects=[]
+        for _obj in events_object:
+            try:
+                pickle.dump(_obj, temp_file)
+                final_event_objects.append(_obj)
+            except:
+                pass
+        pickle.dump(final_event_objects, file)
     print("----- Ending handle_agent_events -----")
 
 @app.post("/ag-ui/")

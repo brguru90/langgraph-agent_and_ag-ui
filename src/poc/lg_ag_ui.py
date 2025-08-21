@@ -3,6 +3,7 @@ import json
 from langgraph.types import Command,Interrupt
 from langchain_core import messages as langchain_messages
 from ag_ui.core import EventType
+import copy
 
 from ag_ui.core import (
     EventType,
@@ -230,7 +231,8 @@ class LangGraphToAgUi:
             for chunk in chunks:
                 yield chunk
 
-    async def transform_events(self,event):    
+    async def transform_events(self,event):  # !event: don't modify event it will have reference
+        # event=copy.deepcopy(event) # !Caution, avoid modifying langgraph data, since it will have reference to all its internal variables
         _event=self.__get_filtered_data(event)
         if _event is None:
             yield None
@@ -254,7 +256,7 @@ class LangGraphToAgUi:
             elif self.ref["last_type"]=="tool_call":
                 return ToolCallEndEvent(
                     type=EventType.TOOL_CALL_END,
-                    tool_call_id="",
+                    tool_call_id=self.tool_use_id or "",
                     raw_event={}
                 )
             else:

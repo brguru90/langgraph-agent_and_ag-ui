@@ -2,6 +2,7 @@
 aws sso login --profile llm-sandbox   
 aws bedrock list-inference-profiles
 uv sync
+docker run -d --name redis-test -p 6379:6379 redis
 ```
 
 # command to run the Agent debug server(LangGraph Studio)
