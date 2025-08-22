@@ -1,5 +1,7 @@
 
 import json
+from typing import Dict,TypedDict
+from enum import Enum
 from langgraph.types import Command,Interrupt
 from langchain_core import messages as langchain_messages
 from ag_ui.core import EventType
@@ -32,20 +34,33 @@ from ag_ui.core import (
 )
 
 
+class EventTrackType(str, Enum):
+    REGISTERED = "registered"
+    START = "start"
+    END = "end"
+
+
+class TrackEvent(TypedDict):
+    state: EventTrackType
+    type: EventType
+
 
 class LangGraphToAgUi:
 
     def __init__(self):
-        self.ref={"wrap_status":None,"last_type":None}
+        self.ref={"wrap_status":None,"last_type":None,"last_id":None}
         self.tool_use_id=None
 
         self.event_types={}
         self.chunk_types={}
         self.parsed_events={}
         self.unparsed_events={}
+        self.filtered_event=None
+        self.track_event:Dict[str,TrackEvent]={} # mostly all events are sequential except tool calls
 
     def __get_filtered_data(self,event):
         if "event" in event:
+            self.track_event[event["run_id"]]=self.track_event.get(event["run_id"],{})
             _type=event["event"]
             self.event_types[_type]=self.event_types.get(_type,0)+1
             _contents=None
@@ -93,6 +108,7 @@ class LangGraphToAgUi:
 
         return event
 
+    
     def __process_chunk(self,event,_type,_content):
         last_type=self.ref.get("last_type",_type)
         ac_events=[]
@@ -100,43 +116,51 @@ class LangGraphToAgUi:
             if last_type=="text":
                 ac_events.append(TextMessageEndEvent(
                     type=EventType.TEXT_MESSAGE_END,
-                    message_id=""
+                    message_id=self.ref["last_id"] or ""
+                ))
+            elif last_type=="reasoning_content":
+                ac_events.append(CustomEvent(
+                    type=EventType.CUSTOM,
+                    name=last_type,
+                    value={"text":"","type":EventType.THINKING_TEXT_MESSAGE_END,"message_id":self.ref["last_id"] or ""}
                 ))
             elif last_type=="tool_use":
                 ac_events.append(CustomEvent(
                     type=EventType.CUSTOM,
                     name=last_type,
-                    value={"text":"","type":EventType.TEXT_MESSAGE_END}
-                ))
-            elif last_type=="tool_call":
-                ac_events.append(ToolCallEndEvent(
-                    type=EventType.TOOL_CALL_END,
-                    tool_call_id=self.tool_use_id or "",
-                    raw_event={}
+                    value={"text":"","type":EventType.TEXT_MESSAGE_END,"message_id":self.ref["last_id"] or ""}
                 ))
             self.ref["wrap_status"]="ended"
+            self.ref["last_id"]=None
         if _type!= last_type and self.ref["wrap_status"] != "started":
             if _type=="text":
+                self.ref["last_id"]="text_"+event["run_id"]
                 ac_events.append(TextMessageStartEvent(
                     type=EventType.TEXT_MESSAGE_START,
                     role='assistant',
-                    message_id=""
+                    message_id=self.ref["last_id"] or ""
                 ))
-            elif _type=="tool_use":
+            elif _type=="reasoning_content":
+                self.ref["last_id"]="reasoning_content_"+event["run_id"]
                 ac_events.append(CustomEvent(
                     type=EventType.CUSTOM,
                     name=_type,
-                    value={"text":"","type":EventType.TEXT_MESSAGE_START},
+                    value={"text":"","type":EventType.THINKING_TEXT_MESSAGE_START,"message_id":self.ref["last_id"] or ""},
+                ))
+            elif _type=="tool_use":
+                self.ref["last_id"]="tool_use_"+event["run_id"]
+                ac_events.append(CustomEvent(
+                    type=EventType.CUSTOM,
+                    name=_type,
+                    value={"text":"","type":EventType.TEXT_MESSAGE_START,"message_id":self.ref["last_id"] or ""},
                 ))
             self.ref["wrap_status"]="started"    
-        # if not _content:
-        #     self.ref["wrap_status"]="ended"
         if _content:
             if _type=="text":
                 if _content.get("text"):
                     ac_events.append(TextMessageContentEvent(
                         type=EventType.TEXT_MESSAGE_CONTENT,
-                        message_id="",
+                        message_id="text_"+event["run_id"],
                         # raw_event=event,
                         delta= _content.get("text"),
                     ))
@@ -146,16 +170,23 @@ class LangGraphToAgUi:
                         type=EventType.CUSTOM,
                         # raw_event=event,
                         name=_type,
-                        value= {"text":f"Proposed Tool Call: Name: {_content["name"]}, Id: {_content["id"]}","type":EventType.TEXT_MESSAGE_CONTENT}
+                        value= {"text":f"Proposed Tool Call: Name: {_content["name"]}, Id: {_content["id"]}","type":EventType.TEXT_MESSAGE_CONTENT,"message_id":"tool_use_"+event["run_id"]}
                     ))
-                    self.tool_use_id=_content["id"]
                 elif _content.get("input"):
                     ac_events.append(CustomEvent(
                         type=EventType.CUSTOM,
                         # raw_event=event,
                         name=_type,
-                        value= {"text":f"Arguments: {_content["input"]}","type":EventType.TEXT_MESSAGE_CONTENT}
-                    ))                
+                        value= {"text":f"Arguments: {_content["input"]}","type":EventType.TEXT_MESSAGE_CONTENT,"message_id":"tool_use_"+event["run_id"]}
+                    ))   
+            elif _type=="reasoning_content":
+                reasoning_text=_content.get("reasoning_content",{}).get("text")
+                if reasoning_text:
+                    ac_events.append(CustomEvent(
+                        type=EventType.CUSTOM,
+                        name=_type,
+                        value= {"text":reasoning_text,"type":EventType.THINKING_TEXT_MESSAGE_CONTENT,"message_id":"reasoning_content_"+event["run_id"]}
+                    ))   
             else:
                 print("Unhandled chunk type:", _type, _content)
         return ac_events
@@ -172,11 +203,11 @@ class LangGraphToAgUi:
                     self.ref["last_type"] = _content["type"]
         elif self.ref["wrap_status"]=="started": # since this function called first, handle end of text or tool_use use for any other event
             allow_close=self.ref["last_type"] in ["text","tool_use"]
-            allow_close=allow_close or self.ref["last_type"]=="tool_call" and event["event"]!="on_tool_end"
             if allow_close:
                 chunks.extend(self.__process_chunk(event, event["event"], None))
                 self.ref["last_type"]=None
                 self.ref["wrap_status"]="ended"
+                self.ref["last_id"]=None
         return chunks
         
     def __process_non_chunks(self,event):
@@ -188,25 +219,25 @@ class LangGraphToAgUi:
                 ac_events.append(ToolCallStartEvent(
                     type=EventType.TOOL_CALL_START,
                     tool_call_name=event["name"],
-                    tool_call_id=self.tool_use_id or"",
+                    tool_call_id=event["run_id"] or"",
                     raw_event=event
                 ))
                 ac_events.append(ToolCallArgsEvent(
                     type=EventType.TOOL_CALL_ARGS,
                     delta=json.dumps(event["data"]["input"], default=str),
-                    tool_call_id=self.tool_use_id or "",
+                    tool_call_id=event["run_id"] or "",
                     raw_event=event
                 ))
             elif event["event"]=="on_tool_end":
                 self.ref["wrap_status"]="ended"
+                self.ref["last_id"]=None
                 self.ref["last_type"]="tool_call"
                 tool_message:langchain_messages.ToolMessage=event["data"]["output"]
                 ac_events.append(ToolCallEndEvent(
                     type=EventType.TOOL_CALL_END,
-                    tool_call_id=tool_message.tool_call_id,
+                    tool_call_id=event["run_id"] or "",
                     raw_event=event
                 ))
-                self.tool_use_id=tool_message.tool_call_id
             elif event.get("data",{}).get("chunk",{}).get("__interrupt__",False):
                 _interrupt:Interrupt= event["data"]["chunk"]["__interrupt__"]
                 ac_events.append(CustomEvent(
@@ -234,6 +265,7 @@ class LangGraphToAgUi:
     async def transform_events(self,event):  # !event: don't modify event it will have reference
         # event=copy.deepcopy(event) # !Caution, avoid modifying langgraph data, since it will have reference to all its internal variables
         _event=self.__get_filtered_data(event)
+        self.filtered_event=_event
         if _event is None:
             yield None
         else:
@@ -245,19 +277,13 @@ class LangGraphToAgUi:
             if self.ref["last_type"]=="text":
                 return TextMessageEndEvent(
                     type=EventType.TEXT_MESSAGE_END,
-                    message_id=""
+                    message_id=self.ref["last_id"] or ""
                 )
             elif self.ref["last_type"]=="tool_use":
                 return CustomEvent(
                     type=EventType.CUSTOM,
                     name=self.ref["last_type"],
-                    value={"text":"","type":EventType.TEXT_MESSAGE_END}
-                )
-            elif self.ref["last_type"]=="tool_call":
-                return ToolCallEndEvent(
-                    type=EventType.TOOL_CALL_END,
-                    tool_call_id=self.tool_use_id or "",
-                    raw_event={}
+                    value={"text":"","type":EventType.TEXT_MESSAGE_END,"message_id":self.ref["last_id"] or ""}
                 )
             else:
                 print("Unhandled end event type:", self.ref["last_type"])

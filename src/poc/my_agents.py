@@ -9,9 +9,14 @@ from langchain_core import messages
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, START, END
 from fastmcp.client.transports import StdioTransport
-from fastmcp import Client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from fastmcp import Client
+from fastmcp.client.sampling import (
+    SamplingMessage,
+    SamplingParams,
+    RequestContext,
+)
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 from langchain_core.runnables.config import RunnableConfig
@@ -75,13 +80,22 @@ warnings.filterwarnings(
 max_tokens = 20000
 END_CONV="end_conv"
 
-def get_aws_modal():
+thinking_params = {
+    "thinking": {
+        "type": "enabled",
+        "budget_tokens": 2000  # Adjust based on your requirements
+    }
+}
+
+def get_aws_modal(model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=thinking_params,**kwargs):
     return ChatBedrockConverse(
         model_id="us.anthropic.claude-sonnet-4-20250514-v1:0", 
         region_name="us-west-2", 
         credentials_profile_name="llm-sandbox",
-        temperature=0.0,
-        max_tokens=max_tokens,         
+        temperature=1 if additional_model_request_fields else temperature,
+        max_tokens=model_max_tokens, 
+        additional_model_request_fields=additional_model_request_fields,
+        **kwargs
     )
     # return ChatOllama(
     #     model="llama3.2",
@@ -409,10 +423,10 @@ async def recent_memory(
     """
     return await query_memories(context,record_limit,record_offset, config=config, store=store, get_recent=True)
  
-
 class MyAgent:   
     def __init__(self):
         print("__MyAgent__")
+        self.base_llm = None
         self.llm = None
         self.client = None
         self.client_session_ctx = None
@@ -814,31 +828,50 @@ Then call the store_messages tool with meaningful content and context parameters
                 goto=END_CONV
             )     
 
-    def on_start(self, run:Run, config:RunnableConfig):
+    def on_start(run:Run, config:RunnableConfig):
         print("\n\ninitial state:", json.dumps(self.get_state(config),default=str))
         print("\nconfig:", json.dumps(config,default=str))
         self.get_state(config)
+
+    async def mcp_sampling_handler(
+        self,
+        _messages: list[SamplingMessage],
+        params: SamplingParams,
+        context: RequestContext
+    ) -> BaseMessage:
+        print(params)
+        print("\n\n---------- mcp_sampling_handler -------------\n\n")
+        compatible_messages=[messages.HumanMessage(content=message.content.text, id=str(uuid.uuid4())) for message in _messages]
+        if count_tokens_approximately(compatible_messages) > 1000:
+            raise ValueError(f"Messages exceed 1000 tokens({count_tokens_approximately(compatible_messages)}), unable to process.")
+        response=await get_aws_modal(model_max_tokens=1200,temperature=0.0,additional_model_request_fields=None).ainvoke(compatible_messages) # without any tool
+        print("MCP response:", response)
+        return response.content
 
     async def init(self):
         """Initialize the agent with MCP tools and LLM"""
 
         # Initialize LLMs
-        self.llm = get_aws_modal()
+        self.base_llm = get_aws_modal()
 
-        self.client = MultiServerMCPClient(
-            {
+        mcp_config={
                 "fds": {
                     "command": "uvx",
                     "args": ["fds-mcp-server"],
                     "transport": "stdio",
                 }
-            }
-        )
+        }
+
+        # self.client = MultiServerMCPClient(mcp_config,)
+        self.client=Client(mcp_config,sampling_handler=self.mcp_sampling_handler)
+        
 
         # Store the context manager and enter it properly
-        self.client_session_ctx = self.client.session("fds")
-        self.client_session = await self.client_session_ctx.__aenter__()
+        # self.client_session_ctx = self.client.session("fds")
+        # self.client_session = await self.client_session_ctx.__aenter__()
         
+        # print("Available tools:", await self.client_session.list_tools())
+        self.client_session = (await self.client.__aenter__()).session
         # print("Available tools:", await self.client_session.list_tools())
         self.tools = await load_mcp_tools(self.client_session)
         
@@ -853,7 +886,7 @@ Then call the store_messages tool with meaningful content and context parameters
         self.tools.append(recent_memory)
         self.tools.append(query_memory_id) 
 
-        self.llm = self.llm.bind_tools(self.tools)            
+        self.llm = self.base_llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
 
 
