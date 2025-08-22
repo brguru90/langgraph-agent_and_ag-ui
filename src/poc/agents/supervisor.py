@@ -4,10 +4,10 @@ from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from typing import TypedDict, Literal,List
 from langchain_ollama import ChatOllama
 from langchain_aws import ChatBedrockConverse
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolCallId
 from langchain_core import messages
 from langgraph.prebuilt import ToolNode
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph,MessagesState, START, END
 from fastmcp.client.transports import StdioTransport
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -44,7 +44,11 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import traceback
+from .coding_agent import CodingAgent
+from .research_agent import ResearchAgent
 
+from .state import ChatState
+from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper
 
 import warnings
 warnings.filterwarnings(
@@ -73,185 +77,14 @@ warnings.filterwarnings(
     category=DeprecationWarning
 )
 
-# claude-sonnet-4 -> supports upto 200k tokens
 
-# max_tokens = 65536
-# max_tokens = 2000
-max_tokens = 20000
 END_CONV="end_conv"
 
-thinking_params = {
-    "thinking": {
-        "type": "enabled",
-        "budget_tokens": 2000  # Adjust based on your requirements
-    }
-}
 
-def get_aws_modal(model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=thinking_params,**kwargs):
-    return ChatBedrockConverse(
-        model_id="us.anthropic.claude-sonnet-4-20250514-v1:0", 
-        region_name="us-west-2", 
-        credentials_profile_name="llm-sandbox",
-        temperature=1 if additional_model_request_fields else temperature,
-        max_tokens=model_max_tokens, 
-        additional_model_request_fields=additional_model_request_fields,
-        **kwargs
-    )
-    # return ChatOllama(
-    #     model="llama3.2",
-    #     base_url="http://192.168.3.104:11434"
-    # )
-
-def get_aws_embed_model():
-    return BedrockEmbeddings(
-        model_id="amazon.titan-embed-text-v2:0",
-        region_name="us-west-2",
-        credentials_profile_name="llm-sandbox"
-    )
-
-
-class AsyncSqliteSaverWrapper(BaseCheckpointSaver):
-    """
-    A wrapper around SqliteSaver that provides full async support while maintaining
-    sync compatibility. This wrapper uses a thread pool to execute sync operations
-    asynchronously without blocking the event loop.
-    """
-    
-    def __init__(self, sqlite_saver: SqliteSaver, max_workers: int = 4):
-        """
-        Initialize the async wrapper.
-        
-        Args:
-            sqlite_saver: The SqliteSaver instance to wrap
-            max_workers: Maximum number of threads in the thread pool
-        """
-        self.sqlite_saver = sqlite_saver
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._loop = None
-    
-    def _ensure_loop(self):
-        """Ensure we have access to the current event loop"""
-        try:
-            self._loop = asyncio.get_running_loop()
-        except RuntimeError:
-            self._loop = None
-    
-    # Delegate config_specs to inner saver
-    @property
-    def config_specs(self):
-        return self.sqlite_saver.config_specs
-    
-    # Sync methods - delegate directly to SqliteSaver
-    def get_tuple(self, config):
-        return self.sqlite_saver.get_tuple(config)
-    
-    def list(self, config, *, filter=None, before=None, limit=None):
-        return self.sqlite_saver.list(config, filter=filter, before=before, limit=limit)
-    
-    def put(self, config, checkpoint: Checkpoint, metadata, new_versions):
-        return self.sqlite_saver.put(config, checkpoint, metadata, new_versions)
-    
-    def put_writes(self, config, writes, task_id, task_path=""):
-        return self.sqlite_saver.put_writes(config, writes, task_id, task_path)
-    
-    def delete_thread(self, thread_id):
-        return self.sqlite_saver.delete_thread(thread_id)
-    
-    def get_next_version(self, current, channel):
-        return self.sqlite_saver.get_next_version(current, channel)
-    
-    # Async methods - run sync methods in thread pool
-    async def aget_tuple(self, config):
-        """Async version of get_tuple"""
-        self._ensure_loop()
-        if self._loop:
-            return await self._loop.run_in_executor(
-                self._executor, 
-                self.sqlite_saver.get_tuple, 
-                config
-            )
-        else:
-            # Fallback to sync if no event loop
-            return self.sqlite_saver.get_tuple(config)
-    
-    async def alist(self, config, *, filter=None, before=None, limit=None):
-        """Async version of list"""
-        self._ensure_loop()
-        if self._loop:
-            # Since list returns a generator, we need to handle it specially
-            items = await self._loop.run_in_executor(
-                self._executor,
-                lambda: list(self.sqlite_saver.list(config, filter=filter, before=before, limit=limit))
-            )
-            for item in items:
-                yield item
-        else:
-            # Fallback to sync if no event loop
-            for item in self.sqlite_saver.list(config, filter=filter, before=before, limit=limit):
-                yield item
-    
-    async def aput(self, config, checkpoint: Checkpoint, metadata, new_versions):
-        """Async version of put"""
-        self._ensure_loop()
-        if self._loop:
-            return await self._loop.run_in_executor(
-                self._executor,
-                self.sqlite_saver.put,
-                config, checkpoint, metadata, new_versions
-            )
-        else:
-            # Fallback to sync if no event loop
-            return self.sqlite_saver.put(config, checkpoint, metadata, new_versions)
-    
-    async def aput_writes(self, config, writes, task_id, task_path=""):
-        """Async version of put_writes"""
-        self._ensure_loop()
-        if self._loop:
-            return await self._loop.run_in_executor(
-                self._executor,
-                self.sqlite_saver.put_writes,
-                config, writes, task_id, task_path
-            )
-        else:
-            # Fallback to sync if no event loop
-            return self.sqlite_saver.put_writes(config, writes, task_id, task_path)
-    
-    async def adelete_thread(self, thread_id):
-        """Async version of delete_thread"""
-        self._ensure_loop()
-        if self._loop:
-            return await self._loop.run_in_executor(
-                self._executor,
-                self.sqlite_saver.delete_thread,
-                thread_id
-            )
-        else:
-            # Fallback to sync if no event loop
-            return self.sqlite_saver.delete_thread(thread_id)
-    
-    def shutdown(self):
-        """Shutdown the thread pool executor"""
-        if self._executor:
-            self._executor.shutdown(wait=True)
-    
-    def __del__(self):
-        """Cleanup when object is destroyed"""
-        try:
-            self.shutdown()
-        except:
-            pass
-
-
-class ChatState(TypedDict):
-    messages: List[BaseMessage]
-    tool_call_count: int
-    thread_id: str 
-    summary:RunningSummary | None
-    updated_log_term_memory: bool
-    messages_history: List[BaseMessage]
 
 
 memory_tool_names = {'store_messages':"memorizing", 'relevant_memory':"recalling", 'recent_memory':"recalling recent", 'query_memory_id':"querying memory"}
+
 
 
 async def query_memories(
@@ -436,6 +269,7 @@ class MyAgent:
         self.graph = None
         self.max_tool_calls = 6
         self.store:AsyncRedisStore | AsyncSqliteStore| BaseStore = None
+        self.agents=[]
 
     def get_state(self, config:RunnableConfig) -> ChatState:
         """Get the current state of the agent"""
@@ -531,6 +365,7 @@ class MyAgent:
                     visible_messages.append(msg)
             except:
                 print(f"Error processing message: {traceback.format_exc()}",msg)
+                import pdb; pdb.set_trace()
         
 
         # Only update if there are new visible messages
@@ -647,19 +482,6 @@ Then call the store_messages tool with meaningful content and context parameters
     
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
         """Handle any cleanup before conversation ends"""
-
-        # if not state.get("updated_log_term_memory",False) and self.decide_store_messages(state, config, store,True):
-        #     state["updated_log_term_memory"] = True
-        #     return Command(
-        #         update=state,
-        #         goto="llm"
-        #     )
-
-        # if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
-        #     self.sql_lite_conn.commit() 
-        #     self.store_conn.commit()  
-
-
         self.decide_store_messages(state, config, store,True)
         msg = await self.llm.bind_tools([store_messages]).ainvoke(state["messages"])
         tool_res=await self.tool_node.ainvoke({"messages": state["messages"] + [msg]})
@@ -678,11 +500,6 @@ Then call the store_messages tool with meaningful content and context parameters
 
         chat_messages =state["messages"]
         token_limit_warning=False
-        # if count_tokens_approximately(state["messages"]) > (max_tokens*0.75):
-        #     if not chat_messages[-1].additional_kwargs.get("token_limit_warning", False):
-        #         chat_messages.append(messages.HumanMessage(content="User is approaching token limit,consider summarizing", id=str(uuid.uuid4()),additional_kwargs={"hidden_from_chat": True,"token_limit_warning": True}))
-        #     else:
-        #         token_limit_warning=True
         for msg in chat_messages:
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
@@ -719,9 +536,21 @@ Then call the store_messages tool with meaningful content and context parameters
         )
         result = await self.tool_node.ainvoke(state)
 
-        # Combine all messages for the updated state
-        all_updated_messages = state['messages'] + result['messages']
         
+
+        # Combine all messages for the updated state
+
+        tool_messages=[]
+        for tool_message in result:
+            if isinstance(tool_message,Command):
+                tool_messages.extend(tool_message.update.get("messages",[]))
+            else:
+                tool_messages.append(tool_message)
+
+
+
+        all_updated_messages = state['messages'] + tool_messages
+
         # Update messages_history with all new messages (filtering will be done in update_messages_history)
        
 
@@ -828,97 +657,60 @@ Then call the store_messages tool with meaningful content and context parameters
                 goto=END_CONV
             )     
 
-    def on_start(run:Run, config:RunnableConfig):
+    def on_start(self,run:Run, config:RunnableConfig):
         print("\n\ninitial state:", json.dumps(self.get_state(config),default=str))
         print("\nconfig:", json.dumps(config,default=str))
         self.get_state(config)
 
-    async def mcp_sampling_handler(
-        self,
-        _messages: list[SamplingMessage],
-        params: SamplingParams,
-        context: RequestContext
-    ) -> BaseMessage:
-        print(params)
-        print("\n\n---------- mcp_sampling_handler -------------\n\n")
-        compatible_messages=[messages.HumanMessage(content=message.content.text, id=str(uuid.uuid4())) for message in _messages]
-        if count_tokens_approximately(compatible_messages) > 1000:
-            raise ValueError(f"Messages exceed 1000 tokens({count_tokens_approximately(compatible_messages)}), unable to process.")
-        response=await get_aws_modal(model_max_tokens=1200,temperature=0.0,additional_model_request_fields=None).ainvoke(compatible_messages) # without any tool
-        print("MCP response:", response)
-        return response.content
 
     async def init(self):
         """Initialize the agent with MCP tools and LLM"""
 
         # Initialize LLMs
         self.base_llm = get_aws_modal()
-
-        mcp_config={
-                "fds": {
-                    "command": "uvx",
-                    "args": ["fds-mcp-server"],
-                    "transport": "stdio",
-                }
-        }
-
-        # self.client = MultiServerMCPClient(mcp_config,)
-        self.client=Client(mcp_config,sampling_handler=self.mcp_sampling_handler)
         
 
-        # Store the context manager and enter it properly
-        # self.client_session_ctx = self.client.session("fds")
-        # self.client_session = await self.client_session_ctx.__aenter__()
-        
-        # print("Available tools:", await self.client_session.list_tools())
-        self.client_session = (await self.client.__aenter__()).session
-        # print("Available tools:", await self.client_session.list_tools())
-        self.tools = await load_mcp_tools(self.client_session)
-        
-        if self.tools:
-            print(f"Successfully loaded {len(self.tools)} MCP tools")
-        else:
-            print("No tools loaded, returning...")
-            return
-        
+        self.tools = []        
         self.tools.append(store_messages) 
         self.tools.append(relevant_memory) 
         self.tools.append(recent_memory)
-        self.tools.append(query_memory_id) 
+        self.tools.append(query_memory_id)
+
+        coding_agent=CodingAgent(run_as_tool=True)
+        research_agent=ResearchAgent(run_as_tool=True)
+        await coding_agent.init()
+        await research_agent.init()
+
+        # mostly tool to add another tool_call messages to decide next agent
+        self.tools.append(coding_agent.get_steering_tool())
+        self.tools.append(research_agent.get_steering_tool())
 
         self.llm = self.base_llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
 
 
-        summarization_node = SummarizationNode(
-            model=self.llm,
-            max_tokens=max_tokens*0.35,
-            max_tokens_before_summary=max_tokens*0.35,
-            max_summary_tokens=max_tokens*0.30,
-            output_messages_key="messages"
-        )
-        
+      
+
         builder = StateGraph(ChatState)
         builder.add_node('start_conv', self.init_conversation)
         builder.add_node('llm', self.llm_node)
         builder.add_node('tools', self.tools_node)
+        builder.add_node('coding_agent', coding_agent.graph)
+        builder.add_node('research_agent', research_agent.graph)
         builder.add_node('route', self.route_node)
-        # builder.add_node('summarizer', summarization_node)
         builder.add_node('end_conv', self.before_conversation_end)
         
 
-        # builder.add_edge(START, 'start_conv')
         builder.set_entry_point('start_conv')
         builder.add_edge('start_conv', 'llm')
-        # builder.add_edge('summarizer', 'route')
+        builder.add_edge('coding_agent', 'llm')
+        builder.add_edge('research_agent', 'llm')
         builder.add_edge('end_conv', END)
-
         # builder.add_conditional_edges()
             
         
         # memory = InMemorySaver()
-        # wrapped = SummarizingSaver(memory, memory, threshold=5000)        
-        # self._base_graph = builder.compile(checkpointer=wrapped, debug=False, name="fds_agent")
+        # self._base_graph = builder.compile(checkpointer=memory, debug=False, name="fds_agent")
         os.makedirs("data", exist_ok=True)
         sql_file= "data/graph_data.sqlite"
         if os.environ.get("USING_LLM_STUDIO", "false").lower() == "true":
@@ -970,6 +762,11 @@ Then call the store_messages tool with meaningful content and context parameters
         import warnings
 
 
+        for agent in self.agents:
+            try:
+                await agent.close()
+            except Exception as e:
+                print(f"Error closing agent {agent}: {e}")
         
         # Suppress warnings during cleanup
         with warnings.catch_warnings():

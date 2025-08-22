@@ -1,6 +1,6 @@
 import asyncio,json
 from langchain_aws import ChatBedrockConverse
-from .my_agents import MyAgent
+from .agents.supervisor import MyAgent
 from langgraph.types import  Command,Interrupt
 from langchain_core import messages
 import uuid

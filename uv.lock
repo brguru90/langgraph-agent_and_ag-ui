@@ -479,6 +479,7 @@ dependencies = [
     { name = "langgraph-checkpoint-redis" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "langgraph-cli", extra = ["inmem"] },
+    { name = "langgraph-supervisor" },
     { name = "langmem" },
     { name = "pydantic" },
     { name = "requests" },
@@ -504,6 +505,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-redis", specifier = ">=0.1.1" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.11" },
     { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.3.6" },
+    { name = "langgraph-supervisor", specifier = ">=0.0.29" },
     { name = "langmem", specifier = ">=0.0.29" },
     { name = "pydantic", specifier = ">=2.11.0,<2.12.0" },
     { name = "requests", specifier = ">=2.32.4" },
@@ -1061,6 +1063,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2a/3e/3dc45dc7682c9940db9edaf8773d2e157397c5bd6881f6806808afd8731e/langgraph_sdk-0.2.0.tar.gz", hash = "sha256:cd8b5f6595e5571be5cbffd04cf936978ab8f5d1005517c99715947ef871e246", size = 72510, upload-time = "2025-07-22T17:31:06.745Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a5/03/a8ab0e8ea74be6058cb48bb1d85485b5c65d6ea183e3ee1aa8ca1ac73b3e/langgraph_sdk-0.2.0-py3-none-any.whl", hash = "sha256:150722264f225c4d47bbe7394676be102fdbf04c4400a0dd1bd41a70c6430cc7", size = 50569, upload-time = "2025-07-22T17:31:04.582Z" },
+]
+
+[[package]]
+name = "langgraph-supervisor"
+version = "0.0.29"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langgraph" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/f0/fc8d5b5926caf3becfc75ff399c4b855daaff957f804973942457864ce94/langgraph_supervisor-0.0.29.tar.gz", hash = "sha256:0ab6e06e102096071d605268a4138084b87128f0c965e1544f77a7d4f65ca16b", size = 21095, upload-time = "2025-07-28T14:16:23.079Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/15/e3b4ad69b2a5fd6ba3d92bcca92b59ebd3a40f2a55751946728506ba618e/langgraph_supervisor-0.0.29-py3-none-any.whl", hash = "sha256:611dd4545f566f690d30004af3742887ec78134921118706ae7eeb12ce77763d", size = 16039, upload-time = "2025-07-28T14:16:22.259Z" },
 ]
 
 [[package]]

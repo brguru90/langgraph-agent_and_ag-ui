@@ -1,6 +1,6 @@
 import asyncio
 from typing import Callable,Dict
-from poc.my_agents import MyAgent
+from poc.agents.supervisor import MyAgent
 from langgraph.pregel import Pregel
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables.config import RunnableConfig

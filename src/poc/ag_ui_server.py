@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from typing import List,TypedDict,Any,Optional
 from typing_extensions import NotRequired
-from .my_agents import MyAgent,ChatState  # Import your agent definition
+from .agents.supervisor import MyAgent,ChatState  # Import your agent definition
 # from .patched_langgraph_agent import PatchedLangGraphAgent as LangGraphAgent,add_langgraph_fastapi_endpoint
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
