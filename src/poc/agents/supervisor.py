@@ -276,6 +276,7 @@ class MyAgent:
             - you can use multiple tools and agents to achieve the desired outcome.
             - you can use tools to decide which agent to delegate a task to.
             - You should also keep track of the overall progress and ensure that all agents are working effectively towards the common goal.
+            - Important!, Don't summaries the SubAgents responses
 
     """
 

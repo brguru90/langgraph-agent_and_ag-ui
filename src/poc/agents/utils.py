@@ -55,7 +55,7 @@ thinking_params = {
     }
 }
 
-def get_aws_modal(model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=thinking_params,**kwargs):
+def get_aws_modal(model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=None,**kwargs):
     return ChatBedrockConverse(
         model_id="us.anthropic.claude-sonnet-4-20250514-v1:0", 
         region_name="us-west-2", 
@@ -147,7 +147,7 @@ def create_handoff_tool(*, agent_name: str, description: str | None = None):
 
     return handoff_tool
 
-def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=True):
+def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False):
 
     def append_tool_complete_status():
         _id=str(uuid.uuid4())
@@ -168,7 +168,7 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=True):
             ],
         )
         agent_finish_message = messages.ToolMessage(
-            content=f"Returning to Supervisor Agent",
+            content=f"Returning to Supervisor Agent, Important Don't summaries the information, keep the information intact.",
             name=agent.name,
             tool_call_id=_id,
         )
@@ -181,13 +181,13 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=True):
         print(f"\n---- {agent.name} ---- \n",output_messages)
         if not full_history:
             if isinstance(output_messages[-1], messages.ToolMessage):
-                output_messages = output_messages[-2:]
+                output_messages = output_messages[:len(state["messages"])]+output_messages[-2:]
             else:
-                output_messages = output_messages[-1:]
+                output_messages = output_messages[:len(state["messages"])]+output_messages[-1:]
         
         return {
             **output,
-            "messages": output_messages+append_tool_complete_status(),
+            "messages": output_messages,
         }
 
     def call_agent(state: ChatState, config: RunnableConfig) -> ChatState:

@@ -17,7 +17,7 @@ class ResearchAgent:
         return create_handoff_tool(agent_name=SupervisorNode.RESEARCH_AGENT_VAL, description="Assign task to a researcher agent.")
 
     async def init(self):
-        self.llm=get_aws_modal()
+        self.llm=get_aws_modal(additional_model_request_fields=None,temperature=0)
 
         mcp_config={
                 "context7": {
@@ -41,6 +41,7 @@ class ResearchAgent:
                 "You are a research agent.\n\n"
                 "INSTRUCTIONS:\n"
                 "- Assist ONLY with research-related tasks\n"
+                "- Call the tools sequentially\n"
                 "- After you're done with your tasks, respond to the supervisor directly\n"
                 "- Respond ONLY with the results of your work, do NOT include ANY other text."
             ),
