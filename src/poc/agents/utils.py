@@ -10,10 +10,11 @@ from langchain_core.messages.base import BaseMessage
 from langchain_core.messages.utils import count_tokens_approximately
 import uuid
 from langchain_aws import BedrockEmbeddings
+from langgraph.graph.state import CompiledStateGraph
 
 
 import asyncio,json
-from typing import Annotated, NotRequired,Dict,Optional,Any
+from typing import Annotated, NotRequired,Dict,Optional,Any,Type,Literal,TypeAlias
 from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from typing import TypedDict, Literal,List
 from langchain_ollama import ChatOllama
@@ -33,6 +34,12 @@ import aiosqlite
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from langgraph.types import Command, interrupt
+from .state import SupervisorNode,ChatState
+from langgraph.pregel.remote import RemoteGraph
+from langgraph._internal._runnable import RunnableCallable
+from langchain_core.runnables import RunnableConfig
+from uuid import UUID, uuid5
+from langgraph._internal._config import patch_configurable
 
 
 # claude-sonnet-4 -> supports upto 200k tokens
@@ -95,26 +102,123 @@ def create_handoff_tool(*, agent_name: str, description: str | None = None):
     def handoff_tool(
         state: Annotated[MessagesState, InjectedState],
         tool_call_id: Annotated[str, InjectedToolCallId],
-    ) -> Command:
-        # tool_message = {
-        #     "role": "tool",
-        #     "content": f"Successfully transferred to {agent_name}",
-        #     "name": name,
-        #     "tool_call_id": tool_call_id,
-        # }
-        tool_message = messages.ToolMessage(
-            role="tool",
-            content=f"Successfully transferred to {agent_name}",
-            name=name,
-            tool_call_id=tool_call_id,
-        )
-        return Command(
-            goto=agent_name,  
-            update={**state, "messages": state["messages"] + [tool_message]},  
-            graph=Command.PARENT,  
-        )
+    ) -> Command[Literal[SupervisorNode.TOOLS]]:
+        print(f"\n----- handoff_tool ={name},{agent_name}-------\n")
+        pass
+        # # tool_message = {
+        # #     "role": "tool",
+        # #     "content": f"Successfully transferred to {agent_name}",
+        # #     "name": name,
+        # #     "tool_call_id": tool_call_id,
+        # # }
+        # tool_message = messages.ToolMessage(
+        #     content=f"Transferring to Agent {agent_name}",
+        #     name=name,
+        #     tool_call_id=tool_call_id,
+        # )
+        # agent_call_message=messages.AIMessage(
+        #     content=[{
+        #         "type": "text",
+        #         "text": f"Transferring to {agent_name}",
+        #         "index": 0
+        #     }],
+        #     id=str(uuid.uuid4()),
+        #     additional_kwargs={"hidden_from_chat": True, "message_type": "agent_trigger","agent_trigger":True},
+        #     tool_calls=[
+        #         messages.ToolCall(
+        #             name=agent_name,
+        #             args={},
+        #             id=str(uuid.uuid4())
+        #         )
+        #     ],
+        # )
+
+        # return Command(
+        #     goto=SupervisorNode.TOOLS_VAL,  
+        #     update={**state, "messages": [tool_message,agent_call_message]},  
+        #     graph=Command.PARENT,  
+        # )
+
+        # # return Command(
+        # #     goto=agent_name,  
+        # #     update={**state, "messages": [tool_message]},  # we are not handing off it to supervisor and all the state will already synced to main graph
+        # #     graph=Command.PARENT,  
+        # # )
 
     return handoff_tool
+
+def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=True):
+
+    def append_tool_complete_status():
+        _id=str(uuid.uuid4())
+        agent_call_message=messages.AIMessage(
+            content=[{
+                "type": "text",
+                "text": f"{agent.name} Agent execution complete",
+                "index": 0
+            }],
+            id=str(uuid.uuid4()),
+            additional_kwargs={"hidden_from_chat": True, "message_type": "agent_trigger"},
+            tool_calls=[
+                messages.ToolCall(
+                    name=agent.name,
+                    args={},
+                    id=_id
+                )
+            ],
+        )
+        agent_finish_message = messages.ToolMessage(
+            content=f"Returning to Supervisor Agent",
+            name=agent.name,
+            tool_call_id=_id,
+        )
+
+        return [agent_call_message,agent_finish_message]
+
+    def _process_output(state:ChatState,config: RunnableConfig,output: ChatState) -> ChatState:
+        output_messages = output["messages"]
+        print(f"\n---- process_output sub agent = {agent.name} ---- \n")
+        print(f"\n---- {agent.name} ---- \n",output_messages)
+        if not full_history:
+            if isinstance(output_messages[-1], messages.ToolMessage):
+                output_messages = output_messages[-2:]
+            else:
+                output_messages = output_messages[-1:]
+        
+        return {
+            **output,
+            "messages": output_messages+append_tool_complete_status(),
+        }
+
+    def call_agent(state: ChatState, config: RunnableConfig) -> ChatState:
+        thread_id = config.get("configurable", {}).get("thread_id")
+        print(f"\n---- call_agent sub agent = {agent.name} ---- \n")
+        output = agent.invoke(
+            state,
+            patch_configurable(
+                config,
+                {"thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None},
+            )
+            if isinstance(agent, RemoteGraph)
+            else config,
+        )
+        return _process_output(state,config,output)
+
+    async def acall_agent(state: ChatState, config: RunnableConfig) -> ChatState:
+        thread_id = config.get("configurable", {}).get("thread_id")
+        print(f"\n---- acall_agent sub agent = {agent.name} ---- \n")
+        output = await agent.ainvoke(
+            state,
+            patch_configurable(
+                config,
+                {"thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None},
+            )
+            if isinstance(agent, RemoteGraph)
+            else config,
+        )
+        return _process_output(state,config,output)
+
+    return RunnableCallable(call_agent, acall_agent)
 
 
 class AsyncSqliteSaverWrapper(BaseCheckpointSaver):

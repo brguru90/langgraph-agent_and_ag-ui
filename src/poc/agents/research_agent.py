@@ -2,26 +2,25 @@ from langgraph.prebuilt import create_react_agent
 from .utils import mcp_sampling_handler,get_aws_modal,create_handoff_tool
 from fastmcp import Client
 from langchain_mcp_adapters.tools import load_mcp_tools
-from .state import ChatState
+from .state import ChatState,SupervisorNode
 
 
 class ResearchAgent:
 
-    def __init__(self, run_as_tool=False):
+    def __init__(self, return_to_supervisor=False):
         print("__ResearchAgent__")
-        self.agent_as_tool = run_as_tool
+        self.return_to_supervisor = return_to_supervisor
         self.llm = None
         self.graph = None
 
     def get_steering_tool(self):
-        """Get the steering tool for the coding agent"""
-        return create_handoff_tool(agent_name="research_agent", description="Assign task to a researcher agent.")
+        return create_handoff_tool(agent_name=SupervisorNode.RESEARCH_AGENT_VAL, description="Assign task to a researcher agent.")
 
     async def init(self):
         self.llm=get_aws_modal()
 
         mcp_config={
-                "fds": {
+                "context7": {
                     "url": "https://mcp.context7.com/mcp",
                     "transport": "http",
                 }

@@ -46,12 +46,11 @@ from datetime import datetime, timezone
 import traceback
 
 from .utils import max_tokens,thinking_params,mcp_sampling_handler,get_aws_modal,create_handoff_tool
-from .state import ChatState
+from .state import ChatState,SupervisorNode
 
 class CodingAgent:   
-    def __init__(self,run_as_tool=False):
+    def __init__(self):
         print("__CodingAgent__")
-        self.agent_as_tool = run_as_tool
         self.base_llm = None
         self.llm = None
         self.tools = None
@@ -60,8 +59,7 @@ class CodingAgent:
         self.max_tool_calls = 6
 
     def get_steering_tool(self):
-        """Get the steering tool for the coding agent"""
-        return create_handoff_tool(agent_name="coding_agent", description="Assign task to a coding/programming agent(currently it support documentation for the vue3 with the FDS(Fabric Design system) components).")
+        return create_handoff_tool(agent_name=SupervisorNode.CODING_AGENT_VAL, description="Assign task to a coding/programming Agent (currently it support documentation for the vue3 with the FDS(Fabric Design system) components).")
 
     async def llm_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
         """LLM node - only responsible for calling llm.invoke"""
@@ -174,11 +172,6 @@ class CodingAgent:
             )     
 
 
-    # def end_as_tool(self):
-    #     """End the agent's execution as a tool."""
-    #     messages.ToolMessage
-    #     self.agent_as_tool = True
-
     async def init(self):
         """Initialize the agent with MCP tools and LLM"""
 
@@ -212,7 +205,7 @@ class CodingAgent:
         builder.add_edge(START, 'llm')
         builder.add_edge("route", END)
 
-        self.graph = builder.compile(name="coding_agent")
+        self.graph = builder.compile(name=SupervisorNode.CODING_AGENT_VAL)
         self.graph.get_graph().print_ascii()
         
 

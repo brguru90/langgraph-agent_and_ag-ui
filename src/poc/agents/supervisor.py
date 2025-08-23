@@ -1,5 +1,5 @@
 import asyncio,json
-from typing import Annotated, NotRequired,Dict,Optional,Any
+from typing import Annotated, NotRequired,Dict,Optional,Any,cast
 from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from typing import TypedDict, Literal,List
 from langchain_ollama import ChatOllama
@@ -46,9 +46,12 @@ from datetime import datetime, timezone
 import traceback
 from .coding_agent import CodingAgent
 from .research_agent import ResearchAgent
+from langgraph_supervisor.handoff import create_forward_message_tool
+from .state import ChatState,SupervisorNode
+from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper,create_handoff_back_node
+from langgraph_supervisor import create_supervisor
+from langchain_core.language_models import BaseChatModel, LanguageModelLike
 
-from .state import ChatState
-from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper
 
 import warnings
 warnings.filterwarnings(
@@ -76,9 +79,6 @@ warnings.filterwarnings(
     message=r"The `schema` method is deprecated; use `model_json_schema` instead",
     category=DeprecationWarning
 )
-
-
-END_CONV="end_conv"
 
 
 
@@ -270,6 +270,14 @@ class MyAgent:
         self.max_tool_calls = 6
         self.store:AsyncRedisStore | AsyncSqliteStore| BaseStore = None
         self.agents=[]
+        self.system_message="""
+            - You are an supervisor agent, responsible for overseeing and managing other agents.
+            - Your primary role is to delegate tasks to specialized agents based on the user's requests and the context of the conversation.
+            - you can use multiple tools and agents to achieve the desired outcome.
+            - you can use tools to decide which agent to delegate a task to.
+            - You should also keep track of the overall progress and ensure that all agents are working effectively towards the common goal.
+
+    """
 
     def get_state(self, config:RunnableConfig) -> ChatState:
         """Get the current state of the agent"""
@@ -287,7 +295,7 @@ class MyAgent:
             )
         return self.graph.get_state(config).values
     
-    def set_state(self, config:RunnableConfig, new_state:ChatState,as_node:str='tools'):
+    def set_state(self, config:RunnableConfig, new_state:ChatState,as_node:str=SupervisorNode.TOOLS_VAL):
         """Set the current state of the agent"""
         self.graph.update_state(config, values=new_state,as_node=as_node)
 
@@ -365,6 +373,8 @@ class MyAgent:
                     visible_messages.append(msg)
             except:
                 print(f"Error processing message: {traceback.format_exc()}",msg)
+                traceback.print_exc()
+                traceback.print_stack()
                 import pdb; pdb.set_trace()
         
 
@@ -433,6 +443,8 @@ Then call the store_messages tool with meaningful content and context parameters
         # Initialize messages if not already set
         print("\n--state--", state)
 
+        
+
           
         # Initialize messages_history if not already set
         if not state.get("messages_history"):
@@ -477,7 +489,7 @@ Then call the store_messages tool with meaningful content and context parameters
                 "summary": state.get("summary",None),
                 "messages_history": state.get("messages_history", [])
             },
-            goto="llm"
+            goto=SupervisorNode.LLM_VAL
         )
     
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
@@ -495,16 +507,18 @@ Then call the store_messages tool with meaningful content and context parameters
             goto=END
         )
 
-    async def llm_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
+    async def llm_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal[SupervisorNode.ROUTE]]:
         """LLM node - only responsible for calling llm.invoke"""
 
         chat_messages =state["messages"]
         token_limit_warning=False
         for msg in chat_messages:
+            if isinstance(msg,Dict):
+                import pdb; pdb.set_trace()
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
         try:
-            response = self.llm.invoke(chat_messages)
+            response = self.llm.invoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+chat_messages)
         except Exception as e:
             print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
@@ -521,10 +535,12 @@ Then call the store_messages tool with meaningful content and context parameters
                 'thread_id': state['thread_id'],
                 'messages_history': self.update_messages_history(config, state['messages_history'], updated_messages),
             },
-            goto="route"
+            goto=SupervisorNode.ROUTE_VAL
         )
 
-    async def tools_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
+    
+
+    async def tools_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal[SupervisorNode.ROUTE]]:
         """Tools node - only responsible for calling tool_node.ainvoke"""    
         ai_msg:messages.AIMessage=state["messages"][-1]
         print(
@@ -534,20 +550,26 @@ Then call the store_messages tool with meaningful content and context parameters
             "thread_id",state['thread_id'],
             "\n\n"
         )
-        result = await self.tool_node.ainvoke(state)
+        messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))
+        temp_state={
+            **state,
+            "messages": [messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]
+        }
+        result = await self.tool_node.ainvoke(temp_state)
 
         
 
         # Combine all messages for the updated state
-
+        if not isinstance(result,List):
+            result=[result]
         tool_messages=[]
         for tool_message in result:
             if isinstance(tool_message,Command):
                 tool_messages.extend(tool_message.update.get("messages",[]))
+            elif isinstance(tool_message,Dict) and isinstance(tool_message.get("messages",{}),List):
+                tool_messages.extend(tool_message.get("messages",[]))
             else:
                 tool_messages.append(tool_message)
-
-
 
         all_updated_messages = state['messages'] + tool_messages
 
@@ -562,34 +584,42 @@ Then call the store_messages tool with meaningful content and context parameters
                 'tool_call_count': state['tool_call_count']+1,
                 'messages_history': self.update_messages_history(config,state["messages_history"], all_updated_messages)
             },
-            goto="route"
+            goto=SupervisorNode.ROUTE_VAL
         )
 
-    def route_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm","end_conv"]]:
+    def route_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal[SupervisorNode.TOOLS, SupervisorNode.LLM,SupervisorNode.END_CONV,SupervisorNode.CODING_AGENT,SupervisorNode.RESEARCH_AGENT]]:
         """Route node - handles all routing logic using Command pattern"""
         # !!! Command pattern allows us to define custom logic and state can be update during routing
-        
-        # Get the last message to determine routing
-
-
-        # fixed_messages=list(filter(lambda msg: isinstance(msg, messages.BaseMessage) and not isinstance(msg,RemoveMessage), state['messages']))
-        # if len(fixed_messages) < len(state['messages']):
-        #     return Command(
-        #         update={'messages': fixed_messages},
-        #         goto="route"
-        #     )
 
         last_message = state['messages'][-1]
 
-        
+
         print(f"--route_node: message_type={type(last_message).__name__}, tool_count={state['tool_call_count']}, has_tool_calls={hasattr(last_message, 'tool_calls') and bool(last_message.tool_calls)}, message_type_attr={getattr(last_message, 'type', 'no_type')}")
 
-        # if count_tokens_approximately(state["messages"]) >= max_tokens*0.75:
-        #     return Command(
-        #         update={'tool_call_count': 0},
-        #         goto="summarizer"
-        #     )
+        print(f"\n--route_node(last_message):",json.dumps(last_message,default=str,indent=2),end="\n\n")
 
+        def check_call_to_agent():
+            if not isinstance(last_message,messages.AIMessage):
+                return False
+            is_agent_call = last_message.tool_calls[0]['name'].startswith("transfer_to_")  
+            if not is_agent_call:
+                return False
+
+            agent_name= last_message.tool_calls[0]['name'].replace("transfer_to_","")
+            
+            tool_message = messages.ToolMessage(
+                content=f"Successfully transferred to Agent {agent_name}, {agent_name} Agent please assist the user query",
+                name=last_message.tool_calls[0]['name'],
+                tool_call_id=last_message.tool_calls[0]["id"]
+            )
+
+            return Command(
+                update={
+                    'messages':  state['messages'] + [tool_message]
+                },
+                goto=agent_name
+            )
+        
 
         # Check if we've exceeded tool call limit
         if state['tool_call_count'] >= self.max_tool_calls:
@@ -601,28 +631,29 @@ Then call the store_messages tool with meaningful content and context parameters
                 # Explicitly end the graph
                 return Command(
                     update={},  # No state update needed
-                    goto=END_CONV  # End the conversation
+                    goto=SupervisorNode.END_CONV  # End the conversation
                 )
             elif user_answer == 'yes':
                 # Reset tool count and continue with tools if LLM wants to use them
                 if getattr(last_message, 'tool_calls', None):
+                    forward_to_agent=check_call_to_agent()
+                    if forward_to_agent:
+                        return forward_to_agent
                     return Command(
                         update={'tool_call_count': 0},
-                        goto="tools"
+                        goto=SupervisorNode.TOOLS_VAL
                     )
                 else:
                     return Command(
                         update={'tool_call_count': 0},
-                        goto="llm"
+                        goto=SupervisorNode.LLM_VAL
                     )
             else:
                 # User provided new input i.e., its neither yes nor no - this becomes a new human message
                 new_human_message = messages.HumanMessage(content=user_answer, id=str(uuid.uuid4()))
                 updated_messages = state['messages'] + [new_human_message]
                 
-                # Update messages_history with the new human message
-                
-                
+                # Update messages_history with the new human message              
                 # Reset tool count and restart LLM processing
                 return Command(
                     update={
@@ -630,7 +661,7 @@ Then call the store_messages tool with meaningful content and context parameters
                         'tool_call_count': 0,
                         'messages_history': self.update_messages_history(config,state['messages_history'], [new_human_message])
                     },
-                    goto="llm"
+                    goto=SupervisorNode.LLM_VAL
                 )
         
         # Normal flow routing logic:
@@ -639,22 +670,25 @@ Then call the store_messages tool with meaningful content and context parameters
         # 3. If last message is AIMessage without tool_calls → end (LLM finished)
         
         if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            forward_to_agent=check_call_to_agent()
+            if forward_to_agent:
+                return forward_to_agent
             # LLM wants to use tools
             return Command(
                 update={},
-                goto="tools"
+                goto=SupervisorNode.TOOLS_VAL
             )
         elif last_message.type == 'tool':
             # Tool message completed, let LLM process the results
             return Command(
                 update={},
-                goto="llm"
+                goto=SupervisorNode.LLM_VAL
             )
         else:
             # LLM finished without tool calls - end execution
             return Command(
                 update={},
-                goto=END_CONV
+                goto=SupervisorNode.END_CONV
             )     
 
     def on_start(self,run:Run, config:RunnableConfig):
@@ -676,8 +710,8 @@ Then call the store_messages tool with meaningful content and context parameters
         self.tools.append(recent_memory)
         self.tools.append(query_memory_id)
 
-        coding_agent=CodingAgent(run_as_tool=True)
-        research_agent=ResearchAgent(run_as_tool=True)
+        coding_agent=CodingAgent()
+        research_agent=ResearchAgent()
         await coding_agent.init()
         await research_agent.init()
 
@@ -692,20 +726,19 @@ Then call the store_messages tool with meaningful content and context parameters
       
 
         builder = StateGraph(ChatState)
-        builder.add_node('start_conv', self.init_conversation)
-        builder.add_node('llm', self.llm_node)
-        builder.add_node('tools', self.tools_node)
-        builder.add_node('coding_agent', coding_agent.graph)
-        builder.add_node('research_agent', research_agent.graph)
-        builder.add_node('route', self.route_node)
-        builder.add_node('end_conv', self.before_conversation_end)
-        
+        builder.add_node(SupervisorNode.START_CONV_VAL, self.init_conversation)
+        builder.add_node(SupervisorNode.LLM_VAL, self.llm_node)
+        builder.add_node(SupervisorNode.TOOLS_VAL, self.tools_node)
+        builder.add_node(SupervisorNode.CODING_AGENT_VAL, create_handoff_back_node(coding_agent.graph))
+        builder.add_node(SupervisorNode.RESEARCH_AGENT_VAL, create_handoff_back_node(research_agent.graph))
+        builder.add_node(SupervisorNode.ROUTE_VAL, self.route_node)
+        builder.add_node(SupervisorNode.END_CONV_VAL, self.before_conversation_end)
 
-        builder.set_entry_point('start_conv')
-        builder.add_edge('start_conv', 'llm')
-        builder.add_edge('coding_agent', 'llm')
-        builder.add_edge('research_agent', 'llm')
-        builder.add_edge('end_conv', END)
+        builder.set_entry_point(SupervisorNode.START_CONV_VAL)
+        builder.add_edge(SupervisorNode.START_CONV_VAL, SupervisorNode.LLM_VAL)
+        builder.add_edge(SupervisorNode.CODING_AGENT_VAL, SupervisorNode.LLM_VAL)
+        builder.add_edge(SupervisorNode.RESEARCH_AGENT_VAL, SupervisorNode.LLM_VAL)
+        builder.add_edge(SupervisorNode.END_CONV_VAL, END)
         # builder.add_conditional_edges()
             
         
