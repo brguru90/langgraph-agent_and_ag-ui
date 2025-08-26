@@ -48,16 +48,19 @@ from langgraph._internal._config import patch_configurable
 # max_tokens = 2000
 max_tokens = 20000
 
+# openai.gpt-oss-20b-1:0
+
 thinking_params = {
     "thinking": {
         "type": "enabled",
-        "budget_tokens": 6000  # Adjust based on your requirements
+        "budget_tokens": 2000  # Adjust based on your requirements
     }
 }
 
 def get_aws_modal(model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=None,**kwargs):
     return ChatBedrockConverse(
         model_id="us.anthropic.claude-sonnet-4-20250514-v1:0", 
+        # model_id="openai.gpt-oss-120b-1:0", 
         region_name="us-west-2", 
         credentials_profile_name="llm-sandbox",
         temperature=1 if additional_model_request_fields else temperature,

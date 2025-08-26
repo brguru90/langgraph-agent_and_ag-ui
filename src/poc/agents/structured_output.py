@@ -1,5 +1,5 @@
 import uuid
-from typing import Literal,Annotated, NotRequired,Dict,Optional,Any,cast
+from typing import Literal,Annotated, NotRequired,Dict,Optional,Any,cast,List
 
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, START, END
@@ -15,18 +15,51 @@ import traceback
 from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from langchain_core.tools import tool, InjectedToolCallId
 
+from pydantic import BaseModel, Field
+
+class CodeStructure(BaseModel):
+    """Schema the software code."""
+    code: str = Field(..., description="The code implementation")
+    file_name: str = Field(..., description="The name of the file containing the code")
+    language: str = Field(..., description="The programming language of the code")
+    framework: str = Field(..., description="The framework used in the code")
+    descriptions: List[str] = Field(..., description="Descriptions of the code snippet")
+
+class CodeSnippetsStructure(BaseModel):
+    """Schema the software code."""
+    code_snippets: List[CodeStructure] = Field(..., description="The list of code snippets with file names,language,framework and other relevant information")
+    descriptions: List[str] = Field(..., description="Overall descriptions of the code snippets")
+
+
 @tool
-async def combine_responses(
-    state: Annotated[ChatState,InjectedState],
-) -> str | list[str | dict]:
+def combine_responses() -> str | list[str | dict]:
     """Combine the responses,
     - If the multiple user queries provided or the multiple steps involved with related response, then add one or more steps to combine the response or conclude the response meaningfully into single final response.
     - If the multiple unrelated queries provided or the multiple steps involved with unrelated response, then add one or more steps to combine all the information into different block/sections in the same single final response.
     - Don't summaries and don't loose any information from the final response while combining.
+    - before combining the responses, first check whether the nature of query required the structured output if its required then first execute structured_output tools then execute the combine_responses tool.
+    - While combining, if there is a structured output then don't modify the response and keep the structured output intact.
     """
 
     return ""
 
+
+@tool
+def structured_output_for_code() -> CodeSnippetsStructure:
+    """Provide the structured output for the code implementations,
+
+    Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
+    - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
+    - Don't structure the output if user only ask for documentation or code snippets or example or similar
+
+    Guidelines:
+    - Include all relevant code snippets, file names, and other contextual information.
+    - Maintain the original formatting and structure of the code as much as possible.
+    - The final code should be executable
+
+    """
+
+    return ""
 
 class StructuredOutputAgent:
 
@@ -38,12 +71,12 @@ class StructuredOutputAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.descriptions="Responsible for generating structured outputs from unstructured inputs and also combining the multiple information from different execution steps."
+        self.descriptions="Responsible for generating structured outputs and also combining the multiple information from different execution steps."
 
     def get_steering_tool(self):
         return create_handoff_tool(agent_name=SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, description=f"Assign task to a structured output agent ({self.descriptions}).")
     
-    def combine_responses(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
+    async def combine_responses(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
         """Combine responses node - only responsible for calling combine_responses tool"""    
         plans=state["plan"].plan
         combine_response_payload=[]
@@ -57,7 +90,30 @@ class StructuredOutputAgent:
                         id=str(uuid.uuid4())
                     )
                 )
-        response=self.base_llm.invoke(combine_response_payload)
+        response=await self.base_llm.ainvoke(combine_response_payload)
+        
+        return Command(
+            update={
+                'messages': state["messages"] + [response],
+                'tool_call_count': state['tool_call_count'] + 1
+            },
+            goto=END
+        )
+    
+    async def structured_output_for_code(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
+        """Structured output for code node - only responsible for calling structured_output_for_code tool"""    
+        plans=state["plan"].plan
+        structure_code_payload=[]
+        for plan in plans:
+            if plan.status == "pending":
+                instructions=plan.model_dump_json()
+                structure_code_payload.append(    
+                    messages.HumanMessage(
+                        content=f"provide structured output for the code implementations for the plan:\n {instructions}",
+                        id=str(uuid.uuid4())
+                    )
+                )
+        response=await self.base_llm.ainvoke(structure_code_payload)
         
         return Command(
             update={
@@ -75,7 +131,7 @@ class StructuredOutputAgent:
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
         try:
-            response = self.llm.invoke(chat_messages)
+            response = await self.llm.ainvoke(chat_messages)
         except Exception as e:
             print(f"Error invoking LLM: {e}\n", chat_messages, traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}", id=str(uuid.uuid4()))

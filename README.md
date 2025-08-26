@@ -5,6 +5,11 @@ uv sync
 docker run -d --name redis-test -p 6379:6379 redis
 ```
 
+# queries
+- `implement a page to showcase the 2 most useful variants of button component from FDS`
+- `provide the documentations for FDS button and ansible playbook`
+
+
 # command to run the Agent debug server(LangGraph Studio)
 `bash fds_dev.sh`
 <img width="907" height="593" alt="image" src="https://github.com/user-attachments/assets/e7d98f8d-5fba-434e-adbd-8683ff350710" />

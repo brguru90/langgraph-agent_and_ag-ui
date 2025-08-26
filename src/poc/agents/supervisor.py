@@ -290,7 +290,7 @@ async def get_user_original_queries(
 
 
 @tool
-async def plan_executor_agent() -> str:
+def plan_executor_agent() -> str:
     """Initiate the execution of the plan executor agent.
         This Plan Executor agent will take care of
         1. Creating the plan 
@@ -556,7 +556,7 @@ Then call the store_messages tool with meaningful content and context parameters
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
         try:
-            response = self.llm.invoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+chat_messages)
+            response = await self.llm.ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+chat_messages)
         except Exception as e:
             print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))

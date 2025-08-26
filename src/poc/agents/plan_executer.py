@@ -87,6 +87,12 @@ plan_prompt="""
         - If the multiple user queries provided or the multiple steps involved with related response, then add one or more steps to combine the response or conclude the response meaningfully into single final response.
         - If the multiple unrelated queries provided or the multiple steps involved with unrelated response, then add one or more steps to combine all the information into different block/sections in the same single final response.
         - Don't summaries and don't loose any information from the final response while combining.
+        - before combining the responses, first check whether the nature of query required the structured output if its required then first execute structured_output tools then execute the combine_responses tool.
+        - While combining response to single final response, if there is a structured output then don't modify the response and keep the structured output intact.
+
+        Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
+        - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
+        - Don't structure the output if user only ask for documentation or code snippets or example or similar
 
         Available Tools and Agents:
         {tools}
@@ -119,7 +125,7 @@ class PlanExecuter:
 
         
     
-    def init_conversation(self, state: ChatState, config: RunnableConfig) ->  Command[Literal[SupervisorNode.ROUTE]]: # get_state won't  work properly in initial conv
+    async def init_conversation(self, state: ChatState, config: RunnableConfig) ->  Command[Literal[SupervisorNode.ROUTE]]: # get_state won't  work properly in initial conv
         """Initialize the conversation state"""     
         tools=[]
         for agent in self.agents:
@@ -131,7 +137,7 @@ class PlanExecuter:
                 "tools":[{"name":tool.name,"description":tool.description,"args":tool.args} for tool in agent_tools]
             })
 
-        plan=self.base_llm.with_structured_output(PlanOutputModal).invoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=parser.get_format_instructions()), id=str(uuid.uuid4()))])
+        plan=await self.base_llm.with_structured_output(PlanOutputModal).ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=parser.get_format_instructions()), id=str(uuid.uuid4()))])
 
         return Command(
             update={
