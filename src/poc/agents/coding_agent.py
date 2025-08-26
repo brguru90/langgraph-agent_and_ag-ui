@@ -57,9 +57,10 @@ class CodingAgent:
         self.tool_node = None
         self.graph = None
         self.max_tool_calls = 6
+        self.descriptions="Provides documentation for the vue3 with the FDS(Fabric Design system) components"
 
     def get_steering_tool(self):
-        return create_handoff_tool(agent_name=SupervisorNode.CODING_AGENT_VAL, description="Assign task to a coding/programming Agent (currently it support documentation for the vue3 with the FDS(Fabric Design system) components).")
+        return create_handoff_tool(agent_name=SupervisorNode.CODING_AGENT_VAL, description=f"Assign task to a coding/programming Agent ({self.descriptions}")
     
     
 

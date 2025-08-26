@@ -1,4 +1,4 @@
-from typing import TypedDict,List,Literal,get_args
+from typing import TypedDict,List,Literal,get_args,NotRequired
 from enum import Enum
 from langchain_core.messages.base import BaseMessage
 from langmem.short_term import RunningSummary
@@ -38,8 +38,7 @@ class ChatState(AgentState):
     tool_call_count: int
     thread_id: str 
     messages_history: List[BaseMessage]
-    conversation_steer_attempt_behind: int
-    plan_executed: bool
+    plan_executed: NotRequired[bool]
     plan: PlanOutputModal
 
 
@@ -54,6 +53,7 @@ class SupervisorNode:
     PLAN_EXECUTER = Literal["plan_executer"]
     CODING_AGENT = Literal["coding_agent"]
     RESEARCH_AGENT = Literal["research_agent"]
+    STRUCTURED_OUTPUT_AGENT = Literal["structured_output_agent"]
     POST_AGENT_EXECUTION = Literal["post_agent_execution"]
 
     START_CONV_VAL = "start_conv"
@@ -65,4 +65,5 @@ class SupervisorNode:
     PLAN_EXECUTER_VAL = "plan_executer"
     CODING_AGENT_VAL = "coding_agent"
     RESEARCH_AGENT_VAL = "research_agent"
+    STRUCTURED_OUTPUT_AGENT_VAL = "structured_output_agent"
     POST_AGENT_EXECUTION_VAL = "post_agent_execution"

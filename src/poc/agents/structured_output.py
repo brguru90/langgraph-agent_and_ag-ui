@@ -1,5 +1,6 @@
 import uuid
-from typing import Literal
+from typing import Literal,Annotated, NotRequired,Dict,Optional,Any,cast
+
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command
@@ -11,25 +12,60 @@ from fastmcp import Client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from .state import ChatState,SupervisorNode
 import traceback
+from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
+from langchain_core.tools import tool, InjectedToolCallId
+
+@tool
+async def combine_responses(
+    state: Annotated[ChatState,InjectedState],
+) -> str | list[str | dict]:
+    """Combine the responses,
+    - If the multiple user queries provided or the multiple steps involved with related response, then add one or more steps to combine the response or conclude the response meaningfully into single final response.
+    - If the multiple unrelated queries provided or the multiple steps involved with unrelated response, then add one or more steps to combine all the information into different block/sections in the same single final response.
+    - Don't summaries and don't loose any information from the final response while combining.
+    """
+
+    return ""
 
 
-class ResearchAgent:
+class StructuredOutputAgent:
 
     def __init__(self, return_to_supervisor=False):
-        print("__ResearchAgent__")
+        print("__StructuredOutputAgent__")
         self.return_to_supervisor = return_to_supervisor
         self.base_llm = None
         self.llm = None
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.client = None
-        self.client_session = None
-        self.client_session_ctx = None
-        self.descriptions="provide the generic documentations related to software coding"
+        self.descriptions="Responsible for generating structured outputs from unstructured inputs and also combining the multiple information from different execution steps."
 
     def get_steering_tool(self):
-        return create_handoff_tool(agent_name=SupervisorNode.RESEARCH_AGENT_VAL, description=f"Assign task to a researcher agent ({self.descriptions}).")
+        return create_handoff_tool(agent_name=SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, description=f"Assign task to a structured output agent ({self.descriptions}).")
+    
+    def combine_responses(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
+        """Combine responses node - only responsible for calling combine_responses tool"""    
+        plans=state["plan"].plan
+        combine_response_payload=[]
+        for plan in plans:
+            if plan.status == "pending":
+                instructions=plan.model_dump_json()
+                dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
+                combine_response_payload.append(    
+                    messages.HumanMessage(
+                        content=f"complete execution steps with planning and respective responses for the plan:\n {instructions} dependent_response={dependent_response}",
+                        id=str(uuid.uuid4())
+                    )
+                )
+        response=self.base_llm.invoke(combine_response_payload)
+        
+        return Command(
+            update={
+                'messages': state["messages"] + [response],
+                'tool_call_count': state['tool_call_count'] + 1
+            },
+            goto=END
+        )
 
     async def llm_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
         """LLM node - only responsible for calling llm.invoke"""
@@ -69,19 +105,46 @@ class ResearchAgent:
             goto="route"
         )
 
-    def route_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm"]]:
+    def route_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm","combine_responses"]]:
         """Route node - handles all routing logic using Command pattern"""
         
         last_message = state['messages'][-1]
 
-        print(f"--route_node research_agent: message_type={type(last_message).__name__}, tool_count={state['tool_call_count']}, has_tool_calls={hasattr(last_message, 'tool_calls') and bool(last_message.tool_calls)}, message_type_attr={getattr(last_message, 'type', 'no_type')}, len={len(state['messages'])}", last_message)
+        print(f"--route_node combine_out_agent: message_type={type(last_message).__name__}, tool_count={state['tool_call_count']}, has_tool_calls={hasattr(last_message, 'tool_calls') and bool(last_message.tool_calls)}, message_type_attr={getattr(last_message, 'type', 'no_type')}, len={len(state['messages'])}", last_message)
         
+
+        def check_call_to_agent():
+            print("\n----- check_call_to_agent ------\n")
+            delegate_to_node=["combine_responses"]
+            if not isinstance(last_message,messages.AIMessage):
+                return False
+            is_agent_call = last_message.tool_calls[0]['name'] in delegate_to_node
+            if not is_agent_call:
+                return False
+            
+            tool_message = messages.ToolMessage(
+                content=f"Successfully transferred to Agent `{last_message.tool_calls[0]["name"]}`",
+                name=last_message.tool_calls[0]['name'],
+                tool_call_id=last_message.tool_calls[0]["id"]
+            )
+
+            print("\n------check_plan_executer------\n")
+            return Command(
+                update={
+                    'messages':  state['messages'] + [tool_message]
+                },
+                goto=last_message.tool_calls[0]['name']
+            )  
+
         # Normal flow routing logic:
         # 1. If last message is AIMessage with tool_calls → go to tools
         # 2. If last message is ToolMessage → go to LLM (to process tool results)
         # 3. If last message is AIMessage without tool_calls → end (LLM finished)
         
         if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            forward_to_agent=check_call_to_agent()
+            if forward_to_agent:
+                return forward_to_agent
             # LLM wants to use tools
             return Command(
                 update={},
@@ -106,21 +169,8 @@ class ResearchAgent:
         # Initialize LLMs
         self.base_llm = get_aws_modal(additional_model_request_fields=None, temperature=0)
 
-        mcp_config={
-                "context7": {
-                    "url": "https://mcp.context7.com/mcp",
-                    "transport": "http",
-                }
-        }
-        self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)        
-        self.client_session = (await self.client.__aenter__()).session
-        self.tools = await load_mcp_tools(self.client_session)        
-        if self.tools:
-            print(f"Successfully loaded {len(self.tools)} MCP tools")
-        else:
-            raise ValueError("No tools loaded, returning...")
-        
-        # Bind tools to LLM and create tool node
+        self.tools = []
+        self.tools.append(combine_responses)        
         self.llm = self.base_llm.bind_tools(self.tools)
         self.tool_node = ToolNode(self.tools)
 
@@ -128,12 +178,14 @@ class ResearchAgent:
         builder = StateGraph(ChatState)
         builder.add_node('llm', self.llm_node)
         builder.add_node('tools', self.tools_node)
+        builder.add_node('combine_responses', self.combine_responses)
         builder.add_node('route', self.route_node)        
 
         builder.add_edge(START, 'llm')
+        builder.add_edge("combine_responses", END)
         builder.add_edge("route", END)
 
-        self.graph = builder.compile(name=SupervisorNode.RESEARCH_AGENT_VAL)
+        self.graph = builder.compile(name=SupervisorNode.STRUCTURED_OUTPUT_AGENT)
         self.graph.get_graph().print_ascii()
 
     async def close(self):
@@ -147,32 +199,5 @@ class ResearchAgent:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Clean up resources and close connections"""
-        import asyncio
-        import warnings
-        
-        # Suppress warnings during cleanup
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
 
-            # Close client session first
-            if self.client_session_ctx:
-                try:
-                    print("Closing client session...")
-                    await asyncio.wait_for(
-                        self.client_session_ctx.__aexit__(exc_type, exc_val, exc_tb),
-                        timeout=2.0  # Give it 2 seconds to close gracefully
-                    )
-                    print("Client session closed successfully")
-                except asyncio.TimeoutError:
-                    print("Client session close timed out, forcing cleanup")
-                except Exception as e:
-                    print(f"Error closing client session: {e}")
-                finally:
-                    self.client_session_ctx = None
-                    self.client_session = None
-            
-            # Clean up the main client (no __aexit__ method available)
-            if self.client:
-                self.client = None
-        
         print("Agent cleanup completed")

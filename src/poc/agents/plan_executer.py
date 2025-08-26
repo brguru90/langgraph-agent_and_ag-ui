@@ -46,6 +46,7 @@ from datetime import datetime, timezone
 import traceback
 from .coding_agent import CodingAgent
 from .research_agent import ResearchAgent
+from .structured_output import StructuredOutputAgent
 from langgraph_supervisor.handoff import create_forward_message_tool
 from .state import ChatState,SupervisorNode,PlanOutputModal
 from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper,create_handoff_back_node
@@ -83,8 +84,9 @@ plan_prompt="""
         - If a step depends on the output of a previous step, reference the step_uid(s) in response_from_previous_step.
         - Do not execute the steps; only generate the plan.
         - Output only the structured plan as per the schema above.
-        - If the multiple user queries provided, then add one or more steps to combine the response or conclude the response meaningfully into single final response.
-        - If the multiple unrelated queries provided, then add one or more steps to combine all the information into different block/sections in the same single final response.
+        - If the multiple user queries provided or the multiple steps involved with related response, then add one or more steps to combine the response or conclude the response meaningfully into single final response.
+        - If the multiple unrelated queries provided or the multiple steps involved with unrelated response, then add one or more steps to combine all the information into different block/sections in the same single final response.
+        - Don't summaries and don't loose any information from the final response while combining.
 
         Available Tools and Agents:
         {tools}
@@ -92,6 +94,7 @@ plan_prompt="""
         Output Schema:
         {output_schema}        
         """
+
 
 class PlanExecuter:   
     def __init__(self):
@@ -124,6 +127,7 @@ class PlanExecuter:
             agent_tools:list[BaseTool]=agent.tools
             tools.append({
                 "agent_name":graph.name,
+                "agent_description":agent.descriptions,
                 "tools":[{"name":tool.name,"description":tool.description,"args":tool.args} for tool in agent_tools]
             })
 
@@ -138,7 +142,7 @@ class PlanExecuter:
     
    
  
-    def route_node(self, state:ChatState,config: RunnableConfig) -> Command[Literal[SupervisorNode.CODING_AGENT,SupervisorNode.RESEARCH_AGENT,SupervisorNode.END_CONV]]:
+    def route_node(self, state:ChatState,config: RunnableConfig) -> Command[Literal[SupervisorNode.CODING_AGENT,SupervisorNode.RESEARCH_AGENT,SupervisorNode.STRUCTURED_OUTPUT_AGENT, SupervisorNode.END_CONV]]:
         """Route node - handles all routing logic using Command pattern"""
         last_message = state['messages'][0]
 
@@ -150,11 +154,13 @@ class PlanExecuter:
         for plan in plans:
             if plan.status == "pending":
                 instructions=plan.model_dump_json()
+                dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
                 return Command(
                     update={
                         'messages':  [
                             last_message,
-                            messages.HumanMessage(content=instructions,id=str(uuid.uuid4()))
+                            messages.HumanMessage(content=f"current query: {plan.instruction}",id=str(uuid.uuid4())),
+                            messages.HumanMessage(content=f"complete instructions:\n {instructions} dependent_response={dependent_response}",id=str(uuid.uuid4()))
                         ]
                     },
                     goto=plan.agent_name
@@ -197,14 +203,13 @@ class PlanExecuter:
 
         coding_agent=CodingAgent()
         research_agent=ResearchAgent()
+        structured_output_agent=StructuredOutputAgent()
         await coding_agent.init()
         await research_agent.init()
+        await structured_output_agent.init()
         self.agents.append(coding_agent)
         self.agents.append(research_agent)
-
-        # mostly tool to add another tool_call messages to decide next agent
-        # self.tools.append(coding_agent.get_steering_tool())
-        # self.tools.append(research_agent.get_steering_tool())
+        self.agents.append(structured_output_agent)
 
         self.llm = self.base_llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
@@ -214,6 +219,7 @@ class PlanExecuter:
         builder.add_node(SupervisorNode.START_CONV_VAL, self.init_conversation)
         builder.add_node(SupervisorNode.CODING_AGENT_VAL, create_handoff_back_node(coding_agent.graph))
         builder.add_node(SupervisorNode.RESEARCH_AGENT_VAL, create_handoff_back_node(research_agent.graph))
+        builder.add_node(SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, create_handoff_back_node(structured_output_agent.graph))
         builder.add_node(SupervisorNode.ROUTE_VAL, self.route_node)
         builder.add_node(SupervisorNode.POST_AGENT_EXECUTION_VAL, self.post_agent_execution)
         builder.add_node(SupervisorNode.END_CONV_VAL, self.before_conversation_end)
@@ -222,6 +228,7 @@ class PlanExecuter:
         builder.add_edge(SupervisorNode.START_CONV_VAL, SupervisorNode.ROUTE_VAL)
         builder.add_edge(SupervisorNode.CODING_AGENT_VAL, SupervisorNode.POST_AGENT_EXECUTION_VAL)
         builder.add_edge(SupervisorNode.RESEARCH_AGENT_VAL, SupervisorNode.POST_AGENT_EXECUTION_VAL)
+        builder.add_edge(SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, SupervisorNode.POST_AGENT_EXECUTION_VAL)
         builder.add_edge(SupervisorNode.END_CONV_VAL, END)
 
         self.graph = builder.compile(debug=False, name="plan_executer")

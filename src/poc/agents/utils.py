@@ -51,7 +51,7 @@ max_tokens = 20000
 thinking_params = {
     "thinking": {
         "type": "enabled",
-        "budget_tokens": 2000  # Adjust based on your requirements
+        "budget_tokens": 6000  # Adjust based on your requirements
     }
 }
 
@@ -97,6 +97,7 @@ async def mcp_sampling_handler(
 def create_handoff_tool(*, agent_name: str, description: str | None = None):
     name = f"transfer_to_{agent_name}"
     description = description or f"Ask {agent_name} for help."
+    
 
     @tool(name, description=description)
     def handoff_tool(
@@ -147,7 +148,7 @@ def create_handoff_tool(*, agent_name: str, description: str | None = None):
 
     return handoff_tool
 
-def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False):
+def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False,recursion_limit=25):
 
     def append_tool_complete_status():
         _id=str(uuid.uuid4())
@@ -197,7 +198,10 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False):
             state,
             patch_configurable(
                 config,
-                {"thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None},
+                {
+                    "recursion_limit":recursion_limit,
+                    "thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None
+                },
             )
             if isinstance(agent, RemoteGraph)
             else config,
@@ -211,7 +215,10 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False):
             state,
             patch_configurable(
                 config,
-                {"thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None},
+                {
+                    "recursion_limit":recursion_limit,
+                    "thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None
+                },
             )
             if isinstance(agent, RemoteGraph)
             else config,

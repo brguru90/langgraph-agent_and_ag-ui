@@ -543,10 +543,7 @@ Then call the store_messages tool with meaningful content and context parameters
         updated_messages=state["messages"]
 
         return Command(
-            update={
-                'messages': updated_messages,
-                'messages_history': self.update_messages_history(config, state['messages_history'], updated_messages),
-            },
+            update={},
             goto=END
         )
 
@@ -766,7 +763,7 @@ Then call the store_messages tool with meaningful content and context parameters
         builder.add_node(SupervisorNode.LLM_VAL, self.llm_node)
         builder.add_node(SupervisorNode.TOOLS_VAL, self.tools_node)
         builder.add_node(SupervisorNode.ROUTE_VAL, self.route_node)
-        builder.add_node(SupervisorNode.PLAN_EXECUTER_VAL, create_handoff_back_node(self.plan_executer.graph))
+        builder.add_node(SupervisorNode.PLAN_EXECUTER_VAL, create_handoff_back_node(self.plan_executer.graph,recursion_limit=100))
         builder.add_node(SupervisorNode.END_CONV_VAL, self.before_conversation_end)
 
         builder.set_entry_point(SupervisorNode.START_CONV_VAL)
