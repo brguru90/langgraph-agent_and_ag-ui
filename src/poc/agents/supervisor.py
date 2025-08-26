@@ -80,6 +80,18 @@ warnings.filterwarnings(
     category=DeprecationWarning
 )
 
+from pydantic import BaseModel, Field
+
+class Step(BaseModel):
+    """Represents a single execution step with breakdown and tool calls."""
+    instruction: str = Field(..., description="What the agent needs to do in this step")
+    substeps: List[str] = Field(..., description="Detailed substeps to accomplish this step")
+    tool_calls: List[str] = Field(..., description="Tools or functions the agent should use in this step")
+
+class PlanOutput(BaseModel):
+    """Schema for agent plan containing execution steps."""
+    plan: List[Step] = Field(..., description="List of execution steps")
+
 
 
 
@@ -255,7 +267,34 @@ async def recent_memory(
         record_offset: Offset for pagination. Defaults to 0.
     """
     return await query_memories(context,record_limit,record_offset, config=config, store=store, get_recent=True)
- 
+
+
+
+@tool
+async def get_user_original_queries(
+    *,
+    config: RunnableConfig,
+    state: Annotated[ChatState,InjectedState],
+) -> str:
+    """ Provides the original query made from the user, which is help full for below reason
+        1. it will be help full to steer the conversation back to the original topic to achieve better and accurate results.
+        2. it will be help full to call when the agent execution is deviated due to context switching or other interruptions.
+        3. it will be help full to provide context when the agent is unsure about the user's intent.
+
+        Note: Periodically call this when switching between the contexts
+        Don't miss to call get_user_original_queries when switching between the contexts
+    """
+    human_messages=[msg.content for msg in state["messages"] if isinstance(msg,messages.HumanMessage)]
+    return f"""
+        Here is the original query made by the user in current session,
+        <initial_user_query>
+            {human_messages[0]}
+        </initial_user_query>
+        <all_the_remaining_user_queries>
+            {human_messages[1:]}
+        </all_the_remaining_user_queries>
+    """
+
 class MyAgent:   
     def __init__(self):
         print("__MyAgent__")
@@ -272,6 +311,8 @@ class MyAgent:
         self.agents=[]
         self.system_message="""
             - You are an supervisor agent, responsible for overseeing and managing other agents.
+            - Decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message or you can get the user original queries back by calling "get_user_original_queries" tool.
+            - Avoid re-executing of same agent unless the some additional information is required
             - Your primary role is to delegate tasks to specialized agents based on the user's requests and the context of the conversation.
             - you can use multiple tools and agents to achieve the desired outcome.
             - you can use tools to decide which agent to delegate a task to.
@@ -376,7 +417,6 @@ class MyAgent:
                 print(f"Error processing message: {traceback.format_exc()}",msg)
                 traceback.print_exc()
                 traceback.print_stack()
-                import pdb; pdb.set_trace()
         
 
         # Only update if there are new visible messages
@@ -403,12 +443,8 @@ class MyAgent:
         return existing_history
 
 
-    def decide_store_messages(self,state:ChatState,config: RunnableConfig, store: BaseStore,override_decision:bool=False) -> bool: 
-        # additional_kwargs       
-        chat_messages=state["messages"]
-        if override_decision or count_tokens_approximately(chat_messages) > max_tokens:
-            # Instead of calling with empty args, let the LLM analyze and decide
-            msg="""The conversation has reached a point where important information should be stored in long-term memory. 
+    def decide_store_messages(self,state:ChatState,config: RunnableConfig, store: BaseStore) -> bool:       
+        msg="""The conversation has reached a point where important information should be stored in long-term memory. 
 
 Please analyze the recent conversation and identify:
 1. Key information, decisions, or insights that should be remembered
@@ -416,27 +452,11 @@ Please analyze the recent conversation and identify:
 3. Provide memory_id for the conversation if its relevant to update existing memory with the additional information, if available. But make sure you combine both the existing memory and new information to create a meaningful memory and don't loose any information.
 
 Then call the store_messages tool with meaningful content and context parameters. Do NOT call it with empty or generic parameters."""
-            analysis_prompt = messages.AIMessage(
-                content=[{
-                    "type": "text",
-                    "text": msg,
-                    "index": 0
-                }],
-                id=str(uuid.uuid4()),
-                additional_kwargs={"hidden_from_chat": True, "message_type": "memory_trigger"},
-                usage_metadata={
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens": 0,
-                    "input_token_details": {
-                        "cache_creation": 0,
-                        "cache_read": 0
-                    }
-                }
-            )
-            state["messages"].append(analysis_prompt)
-            return True
-        return False
+        analysis_prompt = messages.SystemMessage(
+            content=msg,
+            id=str(uuid.uuid4()),
+        )
+        return analysis_prompt
             
 
     def init_conversation(self, state: ChatState, config: RunnableConfig, *, store: BaseStore): # get_state won't  work properly in initial conv
@@ -445,7 +465,6 @@ Then call the store_messages tool with meaningful content and context parameters
         print("\n--state--", state)
 
         
-
           
         # Initialize messages_history if not already set
         if not state.get("messages_history"):
@@ -480,6 +499,9 @@ Then call the store_messages tool with meaningful content and context parameters
 
         state["messages_history"]=self.update_messages_history(config, state['messages_history'], [state["messages"][-1]])
 
+        # tasks=self.base_llm.with_structured_output(PlanOutput).invoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content="List all the available tools for planning and also decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message or you can get the user original queries back by calling \"get_user_original_queries\" tool.", id=str(uuid.uuid4()))])
+
+
         # Return command to route to LLM node
         return Command(
             update={
@@ -488,23 +510,44 @@ Then call the store_messages tool with meaningful content and context parameters
                 'thread_id': config["configurable"]["thread_id"],
                 "updated_log_term_memory":False,
                 "summary": state.get("summary",None),
-                "messages_history": state.get("messages_history", [])
+                "messages_history": state.get("messages_history", []),
+                "conversation_steer_attempt_behind":0
             },
             goto=SupervisorNode.LLM_VAL
         )
     
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
         """Handle any cleanup before conversation ends"""
-        self.decide_store_messages(state, config, store,True)
-        msg = await self.llm.bind_tools([store_messages]).ainvoke(state["messages"])
+        store_recom=self.decide_store_messages(state, config, store)        
+        msg = await self.llm.bind_tools([store_messages]).ainvoke(get_buffer_string(state["messages"]+[store_recom]))
         tool_res=await self.tool_node.ainvoke({"messages": state["messages"] + [msg]})
 
         print("\n\n-----before stop-------\n",type(store),store,json.dumps([msg,tool_res],default=str,indent=2),end="\n\n")
 
+
+        chat_messages =state["messages"]
+        for msg in chat_messages:
+            if not hasattr(msg, 'id') or msg.id is None:
+                msg.id = str(uuid.uuid4())
+        try:
+            req=[]
+            req.append(messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4())))
+            req.extend(chat_messages)
+            req.append(messages.HumanMessage(content="Combine all the information and Don't summaries the SubAgents responses", id=str(uuid.uuid4())))
+            _token=count_tokens_approximately(req)
+            print(f"----- Aprox input token = {_token} -------")
+            response = get_aws_modal(model_max_tokens=_token+1000,additional_model_request_fields=None,temperature=0.0).invoke(get_buffer_string(req))
+        except Exception as e:
+            print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
+            response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
-        # Return command to route to END node
+        updated_messages = chat_messages + [response]
+
         return Command(
-            update={},
+            update={
+                'messages': updated_messages,
+                'messages_history': self.update_messages_history(config, state['messages_history'], updated_messages),
+            },
             goto=END
         )
 
@@ -514,8 +557,6 @@ Then call the store_messages tool with meaningful content and context parameters
         chat_messages =state["messages"]
         token_limit_warning=False
         for msg in chat_messages:
-            if isinstance(msg,Dict):
-                import pdb; pdb.set_trace()
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
         try:
@@ -574,6 +615,9 @@ Then call the store_messages tool with meaningful content and context parameters
 
         all_updated_messages = state['messages'] + tool_messages
 
+        if ai_msg.tool_calls[0]["name"]!="get_user_original_queries":
+            state["conversation_steer_attempt_behind"]+=1
+
         # Update messages_history with all new messages (filtering will be done in update_messages_history)
        
 
@@ -583,6 +627,7 @@ Then call the store_messages tool with meaningful content and context parameters
             update={
                 'messages': all_updated_messages,
                 'tool_call_count': state['tool_call_count']+1,
+                'conversation_steer_attempt_behind':state["conversation_steer_attempt_behind"],
                 'messages_history': self.update_messages_history(config,state["messages_history"], all_updated_messages)
             },
             goto=SupervisorNode.ROUTE_VAL
@@ -599,7 +644,30 @@ Then call the store_messages tool with meaningful content and context parameters
 
         print(f"\n--route_node(last_message):",json.dumps(last_message,default=str,indent=2),end="\n\n")
 
+        def try_steer_conversation():
+            if state["conversation_steer_attempt_behind"] > 1:                
+                agent_call_message=messages.AIMessage(
+                    content=[],
+                    id=str(uuid.uuid4()),
+                    additional_kwargs={"hidden_from_chat": True, "message_type": "agent_trigger","agent_trigger":True},
+                    tool_calls=[
+                        messages.ToolCall(
+                            name="get_user_original_queries",
+                            args={},
+                            id=str(uuid.uuid4())
+                        )
+                    ],
+                )
+                return Command(
+                    update={
+                        'messages':  state['messages'] + [agent_call_message]
+                    },
+                    goto=SupervisorNode.TOOLS_VAL
+                )
+            return False
+
         def check_call_to_agent():
+            print("\n----- check_call_to_agent ------\n")
             if not isinstance(last_message,messages.AIMessage):
                 return False
             is_agent_call = last_message.tool_calls[0]['name'].startswith("transfer_to_")  
@@ -614,6 +682,7 @@ Then call the store_messages tool with meaningful content and context parameters
                 tool_call_id=last_message.tool_calls[0]["id"]
             )
 
+            print("------agent_name",agent_name)
             return Command(
                 update={
                     'messages':  state['messages'] + [tool_message]
@@ -632,7 +701,7 @@ Then call the store_messages tool with meaningful content and context parameters
                 # Explicitly end the graph
                 return Command(
                     update={},  # No state update needed
-                    goto=SupervisorNode.END_CONV  # End the conversation
+                    goto=SupervisorNode.END_CONV_VAL  # End the conversation
                 )
             elif user_answer == 'yes':
                 # Reset tool count and continue with tools if LLM wants to use them
@@ -687,10 +756,11 @@ Then call the store_messages tool with meaningful content and context parameters
             )
         else:
             # LLM finished without tool calls - end execution
-            return Command(
-                update={},
-                goto=SupervisorNode.END_CONV
-            )     
+            if not try_steer_conversation():
+                return Command(
+                    update={},
+                    goto=SupervisorNode.END_CONV_VAL
+                )   
 
     def on_start(self,run:Run, config:RunnableConfig):
         print("\n\ninitial state:", json.dumps(self.get_state(config),default=str))
@@ -706,6 +776,7 @@ Then call the store_messages tool with meaningful content and context parameters
         
 
         self.tools = []        
+        self.tools.append(get_user_original_queries)
         self.tools.append(store_messages) 
         self.tools.append(relevant_memory) 
         self.tools.append(recent_memory)

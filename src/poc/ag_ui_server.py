@@ -133,7 +133,7 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
                         "input":{"resume":cmd.resume}
                     }
                 }
-            if __event.get("data") and __event["data"].get("input") and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
+            if __event.get("data") and __event["data"].get("input") and not isinstance(__event["data"]["input"],List) and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
                 # event["data"]["input"]["store"] = "Accessing to store information"
                 __event={
                     **__event,
