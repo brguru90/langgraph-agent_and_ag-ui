@@ -522,23 +522,25 @@ Then call the store_messages tool with meaningful content and context parameters
         print("\n\n-----before stop-------\n",type(store),store,json.dumps([msg,tool_res],default=str,indent=2),end="\n\n")
 
 
-        chat_messages =state["messages"]
-        for msg in chat_messages:
-            if not hasattr(msg, 'id') or msg.id is None:
-                msg.id = str(uuid.uuid4())
-        try:
-            req=[]
-            req.append(messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4())))
-            req.extend(chat_messages)
-            req.append(messages.HumanMessage(content="Combine all the information and Don't summaries the SubAgents responses", id=str(uuid.uuid4())))
-            _token=count_tokens_approximately(req)
-            print(f"----- Aprox input token = {_token} -------")
-            response = get_aws_modal(model_max_tokens=_token+1000,additional_model_request_fields=None,temperature=0.0).invoke(get_buffer_string(req))
-        except Exception as e:
-            print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
-            response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
+        # chat_messages =state["messages"]
+        # for msg in chat_messages:
+        #     if not hasattr(msg, 'id') or msg.id is None:
+        #         msg.id = str(uuid.uuid4())
+        # try:
+        #     req=[]
+        #     req.append(messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4())))
+        #     req.extend(chat_messages)
+        #     req.append(messages.HumanMessage(content="Combine all the information and Don't summaries the SubAgents responses", id=str(uuid.uuid4())))
+        #     _token=count_tokens_approximately(req)
+        #     print(f"----- Aprox input token = {_token} -------")
+        #     response = get_aws_modal(model_max_tokens=_token+1000,additional_model_request_fields=None,temperature=0.0).invoke(get_buffer_string(req))
+        # except Exception as e:
+        #     print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
+        #     response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))
         
-        updated_messages = chat_messages + [response]
+        # updated_messages = chat_messages + [response]
+
+        updated_messages=state["messages"]
 
         return Command(
             update={

@@ -142,6 +142,10 @@ class PlanExecuter:
         """Route node - handles all routing logic using Command pattern"""
         last_message = state['messages'][0]
 
+        print(f"--route_node(plan executer): message_type={type(last_message).__name__}, tool_count={state['tool_call_count']}, has_tool_calls={hasattr(last_message, 'tool_calls') and bool(last_message.tool_calls)}, message_type_attr={getattr(last_message, 'type', 'no_type')}")
+
+        print(f"\n--route_node(plan executer-last_message):",json.dumps(last_message,default=str,indent=2),end="\n\n")
+
         plans=state["plan"].plan
         for plan in plans:
             if plan.status == "pending":
@@ -149,7 +153,7 @@ class PlanExecuter:
                 return Command(
                     update={
                         'messages':  [
-                            messages.HumanMessage(content=last_message,id=str(uuid.uuid4())),
+                            last_message,
                             messages.HumanMessage(content=instructions,id=str(uuid.uuid4()))
                         ]
                     },
@@ -158,9 +162,7 @@ class PlanExecuter:
 
 
         return Command(
-            update={
-                "plans":state["plan"]
-            },
+            update={},
             goto=SupervisorNode.END_CONV_VAL
         )
 
