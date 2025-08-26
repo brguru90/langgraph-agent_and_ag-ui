@@ -14,7 +14,7 @@ from .state import ChatState,SupervisorNode
 import traceback
 from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from langchain_core.tools import tool, InjectedToolCallId
-
+from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
 
 class CodeStructure(BaseModel):
@@ -30,6 +30,8 @@ class CodeSnippetsStructure(BaseModel):
     code_snippets: List[CodeStructure] = Field(..., description="The list of code snippets with file names,language,framework and other relevant information")
     descriptions: List[str] = Field(..., description="Overall descriptions of the code snippets")
 
+
+code_parser = PydanticOutputParser(pydantic_object=CodeSnippetsStructure)
 
 @tool
 def combine_responses() -> str | list[str | dict]:
@@ -90,12 +92,12 @@ class StructuredOutputAgent:
                         id=str(uuid.uuid4())
                     )
                 )
+                break
         response=await self.base_llm.ainvoke(combine_response_payload)
         
         return Command(
             update={
                 'messages': state["messages"] + [response],
-                'tool_call_count': state['tool_call_count'] + 1
             },
             goto=END
         )
@@ -107,18 +109,19 @@ class StructuredOutputAgent:
         for plan in plans:
             if plan.status == "pending":
                 instructions=plan.model_dump_json()
+                dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
                 structure_code_payload.append(    
                     messages.HumanMessage(
-                        content=f"provide structured output for the code implementations for the plan:\n {instructions}",
+                        content=f"provide structured output for the code implementations for the plan:\n {instructions}, dependent_response={dependent_response}, output_schema={code_parser.get_format_instructions()}",
                         id=str(uuid.uuid4())
                     )
                 )
-        response=await self.base_llm.ainvoke(structure_code_payload)
+                break
+        response=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload)
         
         return Command(
             update={
                 'messages': state["messages"] + [response],
-                'tool_call_count': state['tool_call_count'] + 1
             },
             goto=END
         )
@@ -156,12 +159,11 @@ class StructuredOutputAgent:
         return Command(
             update={
                 'messages': all_updated_messages,
-                'tool_call_count': state['tool_call_count'] + 1
             },
             goto="route"
         )
 
-    def route_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm","combine_responses"]]:
+    def route_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm","combine_responses","structured_output_for_code"]]:
         """Route node - handles all routing logic using Command pattern"""
         
         last_message = state['messages'][-1]
@@ -171,7 +173,7 @@ class StructuredOutputAgent:
 
         def check_call_to_agent():
             print("\n----- check_call_to_agent ------\n")
-            delegate_to_node=["combine_responses"]
+            delegate_to_node=["combine_responses","structured_output_for_code"]
             if not isinstance(last_message,messages.AIMessage):
                 return False
             is_agent_call = last_message.tool_calls[0]['name'] in delegate_to_node
@@ -226,7 +228,8 @@ class StructuredOutputAgent:
         self.base_llm = get_aws_modal(additional_model_request_fields=None, temperature=0)
 
         self.tools = []
-        self.tools.append(combine_responses)        
+        self.tools.append(combine_responses) 
+        self.tools.append(structured_output_for_code)       
         self.llm = self.base_llm.bind_tools(self.tools)
         self.tool_node = ToolNode(self.tools)
 
@@ -235,10 +238,12 @@ class StructuredOutputAgent:
         builder.add_node('llm', self.llm_node)
         builder.add_node('tools', self.tools_node)
         builder.add_node('combine_responses', self.combine_responses)
+        builder.add_node('structured_output_for_code', self.structured_output_for_code)
         builder.add_node('route', self.route_node)        
 
         builder.add_edge(START, 'llm')
         builder.add_edge("combine_responses", END)
+        builder.add_edge("structured_output_for_code", END)
         builder.add_edge("route", END)
 
         self.graph = builder.compile(name=SupervisorNode.STRUCTURED_OUTPUT_AGENT)

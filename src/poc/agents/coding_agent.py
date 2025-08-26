@@ -72,7 +72,7 @@ class CodingAgent:
             if not hasattr(msg, 'id') or msg.id is None:
                 msg.id = str(uuid.uuid4())
         try:
-            response = self.llm.invoke(chat_messages)
+            response = await self.llm.ainvoke(chat_messages)
         except Exception as e:
             print(f"Error invoking LLM: {e}\n",chat_messages,traceback.print_exc())
             response = messages.AIMessage(content=f"An error occurred while processing your request. Please try again later. {e}",id=str(uuid.uuid4()))

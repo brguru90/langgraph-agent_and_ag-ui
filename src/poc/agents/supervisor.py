@@ -745,7 +745,7 @@ Then call the store_messages tool with meaningful content and context parameters
         self.tools = []        
         self.tools.append(get_user_original_queries)
         self.tools.append(plan_executor_agent)
-        self.tools.append(store_messages) 
+        # self.tools.append(store_messages) 
         self.tools.append(relevant_memory) 
         self.tools.append(recent_memory)
         self.tools.append(query_memory_id)

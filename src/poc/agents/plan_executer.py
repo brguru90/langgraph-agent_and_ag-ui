@@ -160,6 +160,7 @@ class PlanExecuter:
         for plan in plans:
             if plan.status == "pending":
                 instructions=plan.model_dump_json()
+                print("\n---instructions",instructions)
                 dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
                 return Command(
                     update={
@@ -174,7 +175,9 @@ class PlanExecuter:
 
 
         return Command(
-            update={},
+            update={
+                "tool_call_count":0,
+            },
             goto=SupervisorNode.END_CONV_VAL
         )
 
