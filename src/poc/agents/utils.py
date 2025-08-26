@@ -46,7 +46,7 @@ from langgraph._internal._config import patch_configurable
 
 # max_tokens = 65536
 # max_tokens = 2000
-max_tokens = 20000
+max_tokens = 60000
 
 # openai.gpt-oss-20b-1:0
 
