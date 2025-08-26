@@ -46,12 +46,15 @@ from datetime import datetime, timezone
 import traceback
 from .coding_agent import CodingAgent
 from .research_agent import ResearchAgent
+from .plan_executer import PlanExecuter
 from langgraph_supervisor.handoff import create_forward_message_tool
-from .state import ChatState,SupervisorNode
+from .state import ChatState,SupervisorNode,PlanOutputModal
 from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper,create_handoff_back_node
 from langgraph_supervisor import create_supervisor
 from langchain_core.language_models import BaseChatModel, LanguageModelLike
-
+from langchain_core.output_parsers import PydanticOutputParser
+from langgraph.graph.state import CompiledStateGraph
+from langchain_core.tools import BaseTool
 
 import warnings
 warnings.filterwarnings(
@@ -80,17 +83,7 @@ warnings.filterwarnings(
     category=DeprecationWarning
 )
 
-from pydantic import BaseModel, Field
 
-class Step(BaseModel):
-    """Represents a single execution step with breakdown and tool calls."""
-    instruction: str = Field(..., description="What the agent needs to do in this step")
-    substeps: List[str] = Field(..., description="Detailed substeps to accomplish this step")
-    tool_calls: List[str] = Field(..., description="Tools or functions the agent should use in this step")
-
-class PlanOutput(BaseModel):
-    """Schema for agent plan containing execution steps."""
-    plan: List[Step] = Field(..., description="List of execution steps")
 
 
 
@@ -295,6 +288,18 @@ async def get_user_original_queries(
         </all_the_remaining_user_queries>
     """
 
+
+@tool
+async def plan_executor_agent() -> str:
+    """Initiate the execution of the plan executor agent.
+        This Plan Executor agent will take care of
+        1. Creating the plan 
+        2. defining the steps with detailed description
+        3. and delegating the execution of each plan to respective agents
+        4. Concluding the final response
+    """
+    return ""
+
 class MyAgent:   
     def __init__(self):
         print("__MyAgent__")
@@ -306,9 +311,9 @@ class MyAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
+        self.plan_executer:PlanExecuter=None
         self.max_tool_calls = 6
         self.store:AsyncRedisStore | AsyncSqliteStore| BaseStore = None
-        self.agents=[]
         self.system_message="""
             - You are an supervisor agent, responsible for overseeing and managing other agents.
             - Decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message or you can get the user original queries back by calling "get_user_original_queries" tool.
@@ -330,8 +335,8 @@ class MyAgent:
                     'messages': [],
                     "tool_call_count": 0,
                     "thread_id": config["configurable"]["thread_id"],
-                    "summary": None,
-                    "messages_history": []
+                    "messages_history": [],
+                    "plan_executed":False,
                 },
                 as_node="tools"
             )
@@ -464,7 +469,7 @@ Then call the store_messages tool with meaningful content and context parameters
         # Initialize messages if not already set
         print("\n--state--", state)
 
-        
+        state["plan_executed"]=False        
           
         # Initialize messages_history if not already set
         if not state.get("messages_history"):
@@ -495,23 +500,15 @@ Then call the store_messages tool with meaningful content and context parameters
                 print(f"----- found {len(new_messages)} new messages since last finish")
                 state["messages"] = new_messages
 
-
-
         state["messages_history"]=self.update_messages_history(config, state['messages_history'], [state["messages"][-1]])
-
-        # tasks=self.base_llm.with_structured_output(PlanOutput).invoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content="List all the available tools for planning and also decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message or you can get the user original queries back by calling \"get_user_original_queries\" tool.", id=str(uuid.uuid4()))])
-
-
+        
         # Return command to route to LLM node
         return Command(
             update={
                 'messages': state["messages"],
                 'tool_call_count': 0,
                 'thread_id': config["configurable"]["thread_id"],
-                "updated_log_term_memory":False,
-                "summary": state.get("summary",None),
                 "messages_history": state.get("messages_history", []),
-                "conversation_steer_attempt_behind":0
             },
             goto=SupervisorNode.LLM_VAL
         )
@@ -580,7 +577,6 @@ Then call the store_messages tool with meaningful content and context parameters
             goto=SupervisorNode.ROUTE_VAL
         )
 
-    
 
     async def tools_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal[SupervisorNode.ROUTE]]:
         """Tools node - only responsible for calling tool_node.ainvoke"""    
@@ -615,9 +611,6 @@ Then call the store_messages tool with meaningful content and context parameters
 
         all_updated_messages = state['messages'] + tool_messages
 
-        if ai_msg.tool_calls[0]["name"]!="get_user_original_queries":
-            state["conversation_steer_attempt_behind"]+=1
-
         # Update messages_history with all new messages (filtering will be done in update_messages_history)
        
 
@@ -627,13 +620,12 @@ Then call the store_messages tool with meaningful content and context parameters
             update={
                 'messages': all_updated_messages,
                 'tool_call_count': state['tool_call_count']+1,
-                'conversation_steer_attempt_behind':state["conversation_steer_attempt_behind"],
                 'messages_history': self.update_messages_history(config,state["messages_history"], all_updated_messages)
             },
             goto=SupervisorNode.ROUTE_VAL
         )
 
-    def route_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal[SupervisorNode.TOOLS, SupervisorNode.LLM,SupervisorNode.END_CONV,SupervisorNode.CODING_AGENT,SupervisorNode.RESEARCH_AGENT]]:
+    def route_node(self, state:ChatState,config: RunnableConfig, *, store: BaseStore) -> Command[Literal[SupervisorNode.TOOLS, SupervisorNode.LLM,SupervisorNode.END_CONV,SupervisorNode.PLAN_EXECUTER]]:
         """Route node - handles all routing logic using Command pattern"""
         # !!! Command pattern allows us to define custom logic and state can be update during routing
 
@@ -644,51 +636,27 @@ Then call the store_messages tool with meaningful content and context parameters
 
         print(f"\n--route_node(last_message):",json.dumps(last_message,default=str,indent=2),end="\n\n")
 
-        def try_steer_conversation():
-            if state["conversation_steer_attempt_behind"] > 1:                
-                agent_call_message=messages.AIMessage(
-                    content=[],
-                    id=str(uuid.uuid4()),
-                    additional_kwargs={"hidden_from_chat": True, "message_type": "agent_trigger","agent_trigger":True},
-                    tool_calls=[
-                        messages.ToolCall(
-                            name="get_user_original_queries",
-                            args={},
-                            id=str(uuid.uuid4())
-                        )
-                    ],
-                )
-                return Command(
-                    update={
-                        'messages':  state['messages'] + [agent_call_message]
-                    },
-                    goto=SupervisorNode.TOOLS_VAL
-                )
-            return False
-
         def check_call_to_agent():
             print("\n----- check_call_to_agent ------\n")
             if not isinstance(last_message,messages.AIMessage):
                 return False
-            is_agent_call = last_message.tool_calls[0]['name'].startswith("transfer_to_")  
+            is_agent_call = last_message.tool_calls[0]['name']=="plan_executor_agent"
             if not is_agent_call:
                 return False
-
-            agent_name= last_message.tool_calls[0]['name'].replace("transfer_to_","")
             
             tool_message = messages.ToolMessage(
-                content=f"Successfully transferred to Agent {agent_name}, {agent_name} Agent please assist the user query",
+                content=f"Successfully transferred to Agent `plan_executor_agent`",
                 name=last_message.tool_calls[0]['name'],
                 tool_call_id=last_message.tool_calls[0]["id"]
             )
 
-            print("------agent_name",agent_name)
+            print("\n------check_plan_executer------\n")
             return Command(
                 update={
                     'messages':  state['messages'] + [tool_message]
                 },
-                goto=agent_name
-            )
+                goto=SupervisorNode.PLAN_EXECUTER_VAL
+            )  
         
 
         # Check if we've exceeded tool call limit
@@ -756,11 +724,11 @@ Then call the store_messages tool with meaningful content and context parameters
             )
         else:
             # LLM finished without tool calls - end execution
-            if not try_steer_conversation():
-                return Command(
-                    update={},
-                    goto=SupervisorNode.END_CONV_VAL
-                )   
+           
+            return Command(
+                update={},
+                goto=SupervisorNode.END_CONV_VAL
+            )   
 
     def on_start(self,run:Run, config:RunnableConfig):
         print("\n\ninitial state:", json.dumps(self.get_state(config),default=str))
@@ -777,39 +745,31 @@ Then call the store_messages tool with meaningful content and context parameters
 
         self.tools = []        
         self.tools.append(get_user_original_queries)
+        self.tools.append(plan_executor_agent)
         self.tools.append(store_messages) 
         self.tools.append(relevant_memory) 
         self.tools.append(recent_memory)
         self.tools.append(query_memory_id)
 
-        coding_agent=CodingAgent()
-        research_agent=ResearchAgent()
-        await coding_agent.init()
-        await research_agent.init()
-
-        # mostly tool to add another tool_call messages to decide next agent
-        self.tools.append(coding_agent.get_steering_tool())
-        self.tools.append(research_agent.get_steering_tool())
 
         self.llm = self.base_llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
-
-
       
+
+        self.plan_executer=PlanExecuter()
+        await self.plan_executer.init()
 
         builder = StateGraph(ChatState)
         builder.add_node(SupervisorNode.START_CONV_VAL, self.init_conversation)
         builder.add_node(SupervisorNode.LLM_VAL, self.llm_node)
         builder.add_node(SupervisorNode.TOOLS_VAL, self.tools_node)
-        builder.add_node(SupervisorNode.CODING_AGENT_VAL, create_handoff_back_node(coding_agent.graph))
-        builder.add_node(SupervisorNode.RESEARCH_AGENT_VAL, create_handoff_back_node(research_agent.graph))
         builder.add_node(SupervisorNode.ROUTE_VAL, self.route_node)
+        builder.add_node(SupervisorNode.PLAN_EXECUTER_VAL, create_handoff_back_node(self.plan_executer.graph))
         builder.add_node(SupervisorNode.END_CONV_VAL, self.before_conversation_end)
 
         builder.set_entry_point(SupervisorNode.START_CONV_VAL)
         builder.add_edge(SupervisorNode.START_CONV_VAL, SupervisorNode.LLM_VAL)
-        builder.add_edge(SupervisorNode.CODING_AGENT_VAL, SupervisorNode.LLM_VAL)
-        builder.add_edge(SupervisorNode.RESEARCH_AGENT_VAL, SupervisorNode.LLM_VAL)
+        builder.add_edge(SupervisorNode.PLAN_EXECUTER_VAL, SupervisorNode.ROUTE_VAL)
         builder.add_edge(SupervisorNode.END_CONV_VAL, END)
         # builder.add_conditional_edges()
             
@@ -866,12 +826,8 @@ Then call the store_messages tool with meaningful content and context parameters
         import asyncio
         import warnings
 
-
-        for agent in self.agents:
-            try:
-                await agent.close()
-            except Exception as e:
-                print(f"Error closing agent {agent}: {e}")
+        if self.plan_executer:
+            self.plan_executer.close()
         
         # Suppress warnings during cleanup
         with warnings.catch_warnings():
