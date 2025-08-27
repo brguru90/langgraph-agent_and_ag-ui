@@ -262,33 +262,6 @@ async def recent_memory(
     return await query_memories(context,record_limit,record_offset, config=config, store=store, get_recent=True)
 
 
-
-@tool
-async def get_user_original_queries(
-    *,
-    config: RunnableConfig,
-    state: Annotated[ChatState,InjectedState],
-) -> str:
-    """ Provides the original query made from the user, which is help full for below reason
-        1. it will be help full to steer the conversation back to the original topic to achieve better and accurate results.
-        2. it will be help full to call when the agent execution is deviated due to context switching or other interruptions.
-        3. it will be help full to provide context when the agent is unsure about the user's intent.
-
-        Note: Periodically call this when switching between the contexts
-        Don't miss to call get_user_original_queries when switching between the contexts
-    """
-    human_messages=[msg.content for msg in state["messages"] if isinstance(msg,messages.HumanMessage)]
-    return f"""
-        Here is the original query made by the user in current session,
-        <initial_user_query>
-            {human_messages[0]}
-        </initial_user_query>
-        <all_the_remaining_user_queries>
-            {human_messages[1:]}
-        </all_the_remaining_user_queries>
-    """
-
-
 @tool
 def plan_executor_agent() -> str:
     """Initiate the execution of the plan executor agent.
@@ -316,7 +289,7 @@ class MyAgent:
         self.store:AsyncRedisStore | AsyncSqliteStore| BaseStore = None
         self.system_message="""
             - You are an supervisor agent, responsible for overseeing and managing other agents.
-            - Decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message or you can get the user original queries back by calling "get_user_original_queries" tool.
+            - Decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message.
             - Avoid re-executing of same agent unless the some additional information is required
             - Your primary role is to delegate tasks to specialized agents based on the user's requests and the context of the conversation.
             - you can use multiple tools and agents to achieve the desired outcome.
@@ -749,7 +722,6 @@ Then call the store_messages tool with meaningful content and context parameters
         
 
         self.tools = []        
-        self.tools.append(get_user_original_queries)
         self.tools.append(plan_executor_agent)
         # self.tools.append(store_messages) 
         self.tools.append(relevant_memory) 

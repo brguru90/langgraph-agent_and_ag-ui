@@ -27,6 +27,7 @@ import traceback
 from  .lg_ag_ui import LangGraphToAgUi
 import pickle 
 import tempfile
+from langchain_core import messages
 
 class CommandType(TypedDict):
     # update: Any | None = None
@@ -133,7 +134,7 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
                         "input":{"resume":cmd.resume}
                     }
                 }
-            if __event.get("data") and __event["data"].get("input") and not isinstance(__event["data"]["input"],List) and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
+            if __event.get("data") and __event["data"].get("input") and not isinstance(__event["data"]["input"],List) and not isinstance(event["data"]["input"],messages.BaseMessage) and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
                 # event["data"]["input"]["store"] = "Accessing to store information"
                 __event={
                     **__event,
