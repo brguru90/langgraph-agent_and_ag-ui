@@ -2,6 +2,7 @@ import type { ChatDisplayMessage, GroupedChatDisplayMessage } from "../types";
 import { InterruptMessageComponent } from "./InterruptMessageComponent";
 import { ToolCallGroupComponent } from "./ToolCallGroupComponent";
 import { RegularMessageGroupComponent } from "./RegularMessageGroupComponent";
+import { useEffect } from "react";
 
 interface ChatMessagesContainerProps {
   chatMessages: ChatDisplayMessage[];
@@ -15,7 +16,11 @@ export function ChatMessagesContainer({
   respondToLastInterrupt
   
 }: ChatMessagesContainerProps) {
-  
+
+  useEffect(() => {
+    document.querySelector('.chat_wrapper')?.lastElementChild?.scrollIntoView({ behavior: 'smooth',block:'end' });
+  }, [groupedMessages,chatMessages]);
+
   if (chatMessages.length === 0) {
     return (
       <div
@@ -38,6 +43,9 @@ export function ChatMessagesContainer({
   }
 
 
+  
+
+
   return (
     <div
       style={{
@@ -51,7 +59,7 @@ export function ChatMessagesContainer({
         flexDirection: "column",
       }}
     >
-      <div style={{ flex: 1, padding: "15px" }}>
+      <div style={{ flex: 1, padding: "15px" }} className="chat_wrapper">
         {/* Render grouped messages */}
         {groupedMessages.map((group) => {
           if (group.group_type === 'interrupt') {

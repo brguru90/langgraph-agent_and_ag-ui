@@ -39,3 +39,4 @@ original_events.json
 all_events copy 2.pkl
 plans.json
 all_events copy 3.pkl
+.langchain_cache.db

@@ -489,8 +489,9 @@ Then call the store_messages tool with meaningful content and context parameters
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
         """Handle any cleanup before conversation ends"""
         store_recom=self.decide_store_messages(state, config, store)        
-        msg = await self.llm.bind_tools([store_messages]).ainvoke(get_buffer_string(state["messages"]+[store_recom]))
-        tool_res=await self.tool_node.ainvoke({"messages": state["messages"] + [msg]})
+        msg = await self.base_llm.bind_tools([store_messages]).ainvoke(get_buffer_string(state["messages"]+[store_recom]))
+        temp_tool_node = ToolNode([store_messages])
+        tool_res=await temp_tool_node.ainvoke({"messages": state["messages"] + [msg]})
 
         print("\n\n-----before stop-------\n",type(store),store,json.dumps([msg,tool_res],default=str,indent=2),end="\n\n")
 

@@ -111,8 +111,11 @@ class LangGraphToAgUi:
     
     def __process_chunk(self,event,_type,_content):
         last_type=self.ref.get("last_type",_type)
+        last_id:str=self.ref.get("last_id",event["run_id"]) or event["run_id"]
+        if not last_id.endswith(event["run_id"]):
+            print(event["run_id"],last_id)
         ac_events=[]
-        if _type!= last_type and last_type is not None and self.ref["wrap_status"]=="started":
+        if ((_type!= last_type and last_type is not None) or not last_id.endswith(event["run_id"])) and self.ref["wrap_status"]=="started":
             if last_type=="text":
                 ac_events.append(TextMessageEndEvent(
                     type=EventType.TEXT_MESSAGE_END,
@@ -132,7 +135,7 @@ class LangGraphToAgUi:
                 ))
             self.ref["wrap_status"]="ended"
             self.ref["last_id"]=None
-        if _type!= last_type and self.ref["wrap_status"] != "started":
+        if ((_type!= last_type) or not last_id.endswith(event["run_id"])) and self.ref["wrap_status"] != "started":
             if _type=="text":
                 self.ref["last_id"]="text_"+event["run_id"]
                 ac_events.append(TextMessageStartEvent(

@@ -207,7 +207,12 @@ async def endpoint(input_data: RunAgentInputExtended, request: Request):
                 )
 
             async for event_data in handle_agent_events(request, my_agent, command if command else state, config, encoder):
-                yield encoder.encode(event_data)
+                try:
+                    yield encoder.encode(event_data)
+                except Exception as e:
+                    print(f"Error encoding event: {e}", e)
+                    traceback.print_exc()
+                    yield f"data: {event_data.model_dump_json(by_alias=True, exclude_none=True,fallback=lambda x: str(x))}\n\n"
 
             yield encoder.encode(RunFinishedEvent(
                 type=EventType.RUN_FINISHED,

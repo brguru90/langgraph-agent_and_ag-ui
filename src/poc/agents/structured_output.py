@@ -20,7 +20,8 @@ from langchain_core.messages.utils import count_tokens_approximately
 from botocore.config import Config
 from langchain_core.messages.utils import get_buffer_string
 import json
-
+from langgraph.config import get_stream_writer
+from langchain_core.callbacks.manager import adispatch_custom_event
 
 
 code_parser = PydanticOutputParser(pydantic_object=CodeSnippetsStructure)
@@ -38,7 +39,21 @@ def combine_responses() -> str | list[str | dict]:
     return ""
 
 
-@tool
+@tool(description=f"""Provide the structured output for the code implementations,
+
+    Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
+    - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
+    - Don't structure the output if user only ask for documentation or code snippets or example or similar
+
+    Guidelines:
+    - Include all relevant code snippets, file names, and other contextual information.
+    - Maintain the original formatting and structure of the code as much as possible.
+    - The final code should be executable
+      
+    Output Schema:
+    {code_parser.get_format_instructions()} 
+
+    """)
 def structured_output_for_code() -> CodeSnippetsStructure:
     """Provide the structured output for the code implementations,
 
@@ -76,56 +91,46 @@ class StructuredOutputAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.descriptions="Responsible for generating structured outputs and also combining the multiple information from different execution steps."
+        self.descriptions="Responsible for generating structured outputs and also combining the multiple information from different execution steps but it can do only one task for the agent execution means it can call only one tool for the current agent execution, if another tool call also needed then agent should be re-invoked."
 
     def get_steering_tool(self):
         return create_handoff_tool(agent_name=SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, description=f"Assign task to a structured output agent ({self.descriptions}).")
     
     async def combine_responses(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
         """Combine responses node - only responsible for calling combine_responses tool"""    
-        plans=state["plan"].plan
-        combine_response_payload=[]
-        for plan in plans:
-            if plan.status == "pending":
-                instructions=plan.model_dump_json()
-                dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
-                combine_response_payload.append(    
-                    messages.HumanMessage(
-                        content=f"complete execution steps with planning and respective responses for the plan:\n {instructions} dependent_response={dependent_response}",
-                        id=str(uuid.uuid4())
-                    )
-                )
-                break
+        combine_response_payload=state["messages"]
+        combine_response_payload.append(    
+            messages.HumanMessage(
+                content=f"""Combine the responses:
+                - Don't summaries and don't loose any information from the final response while combining.
+                - While combining, if there is a structured output then don't modify the response and keep the structured output intact.
+                """,
+                id=str(uuid.uuid4())
+            )
+        )
         response=await self.base_llm.ainvoke(combine_response_payload)
         
         return Command(
             update={
                 'messages': state["messages"] + [response],
             },
-            goto=END
+            goto="route"
         )
     
     async def structured_output_for_code(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
         """Structured output for code node - only responsible for calling structured_output_for_code tool"""    
-        plans=state["plan"].plan
-        structure_code_payload=[state["messages"][0]]
-        structure_code_payload.extend(state["messages"][-2:])
-        for plan in plans:
-            if plan.status == "pending":
-                instructions=plan.model_dump_json()
-                dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
-                structure_code_payload.append(    
-                    messages.HumanMessage(
-                        content=f"""
-                        * provide structured output for the code implementations for the plan:
-
-                        ** Instructions: {instructions},
-                        ** Output Schema(Output response should be STRICTLY needed in the format): {code_parser.get_format_instructions()} 
-                        ** Original Response: {dependent_response}""",
-                        id=str(uuid.uuid4())
-                    )
-                )
-                break
+        structure_code_payload=state["messages"]
+        structure_code_payload.append(    
+            messages.HumanMessage(
+                content=f"""
+                * provide structured output for the code implementations for the plan
+                * if the multiple unidentified code snippet present then try to relate each other before providing the structured output
+                * for the descriptions don't create README.md instead provide it as part of structured output which have fields for descriptions
+                * Output Schema(Output response should be STRICTLY needed in the format): {code_parser.get_format_instructions()}
+                """,
+                id=str(uuid.uuid4())
+            )
+        )
         # response=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload)
 
         print(f"\n---- CodeSnippetsStructure, input token count={count_tokens_approximately(structure_code_payload)} ------\n")
@@ -134,7 +139,13 @@ class StructuredOutputAgent:
         while max_retry > 0:
             try:
                 response_struct:CodeSnippetsStructure=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload) # include_raw will cause error since it will return tool message without tool call and this can't be used in other agent where this tools in not bind to llm
-                response=messages.HumanMessage(content=response_struct.model_dump_json(indent=2), id=str(uuid.uuid4()))
+                response=messages.HumanMessage(
+                    content=response_struct.model_dump_json(indent=2), 
+                    id=str(uuid.uuid4()),
+                    additional_kwargs={
+                        "code_block":True
+                    }
+                )
                 break
             except Exception as e:
                 traceback.print_exc()
@@ -144,11 +155,16 @@ class StructuredOutputAgent:
                 # import pdb; pdb.set_trace()
             max_retry -= 1
 
+        # writer = get_stream_writer()
+        # writer({"event":"structured_output","type":"code","data":response_struct.model_dump_json()})
+
+        await adispatch_custom_event("structured_output",{"chunk":{"type":"code","text":response_struct.model_dump()}},config=config)
+
         return Command(
             update={
                 'messages': state["messages"] + [response],
             },
-            goto=END
+            goto="route"
         )
 
     async def llm_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
@@ -188,7 +204,7 @@ class StructuredOutputAgent:
             goto="route"
         )
 
-    def route_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools", "llm","combine_responses","structured_output_for_code"]]:
+    def route_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["tools","combine_responses","structured_output_for_code"]]:
         """Route node - handles all routing logic using Command pattern"""
         
         last_message = state['messages'][-1]
@@ -233,12 +249,6 @@ class StructuredOutputAgent:
                 update={},
                 goto="tools"
             )
-        elif last_message.type == 'tool':
-            # Tool message completed, let LLM process the results
-            return Command(
-                update={},
-                goto="llm"
-            )
         else:
             # LLM finished without tool calls - end execution
             return Command(
@@ -268,8 +278,8 @@ class StructuredOutputAgent:
         builder.add_node('route', self.route_node)        
 
         builder.add_edge(START, 'llm')
-        builder.add_edge("combine_responses", END)
-        builder.add_edge("structured_output_for_code", END)
+        builder.add_edge("combine_responses", "route")
+        builder.add_edge("structured_output_for_code", "route")
         builder.add_edge("route", END)
 
         self.graph = builder.compile(name=SupervisorNode.STRUCTURED_OUTPUT_AGENT)

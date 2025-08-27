@@ -11,7 +11,8 @@ from langchain_core.messages.utils import count_tokens_approximately
 import uuid
 from langchain_aws import BedrockEmbeddings
 from langgraph.graph.state import CompiledStateGraph
-
+from langchain_community.cache import SQLiteCache
+from langchain_core.globals import set_llm_cache
 
 import asyncio,json
 from typing import Annotated, NotRequired,Dict,Optional,Any,Type,Literal,TypeAlias
@@ -58,6 +59,8 @@ thinking_params = {
     }
 }
 
+# set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
 def get_aws_modal(model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",config:Config=None,model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=None,**kwargs):
     return ChatBedrockConverse(
         config=config,
@@ -67,7 +70,8 @@ def get_aws_modal(model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",config:C
         credentials_profile_name="llm-sandbox",
         temperature=1 if additional_model_request_fields else temperature,
         max_tokens=model_max_tokens, 
-        additional_model_request_fields=additional_model_request_fields,        
+        additional_model_request_fields=additional_model_request_fields,    
+        cache=SQLiteCache(database_path=".langchain_cache.db"),    
         **kwargs
     )
     # return ChatOllama(
@@ -197,6 +201,10 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False,re
         }
 
     def call_agent(state: ChatState, config: RunnableConfig) -> ChatState:
+        config={
+            **config,
+            "recursion_limit":recursion_limit,
+        }
         thread_id = config.get("configurable", {}).get("thread_id")
         print(f"\n---- call_agent sub agent = {agent.name} ---- \n")
         output = agent.invoke(
@@ -204,7 +212,6 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False,re
             patch_configurable(
                 config,
                 {
-                    "recursion_limit":recursion_limit,
                     "thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None
                 },
             )
@@ -214,6 +221,10 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False,re
         return _process_output(state,config,output)
 
     async def acall_agent(state: ChatState, config: RunnableConfig) -> ChatState:
+        config={
+            **config,
+            "recursion_limit":recursion_limit,
+        }
         thread_id = config.get("configurable", {}).get("thread_id")
         print(f"\n---- acall_agent sub agent = {agent.name} ---- \n")
         output = await agent.ainvoke(
@@ -221,7 +232,6 @@ def create_handoff_back_node(agent:CompiledStateGraph,full_history:bool=False,re
             patch_configurable(
                 config,
                 {
-                    "recursion_limit":recursion_limit,
                     "thread_id": str(uuid5(UUID(str(thread_id)), agent.name)) if thread_id else None
                 },
             )

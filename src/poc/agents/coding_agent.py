@@ -57,7 +57,7 @@ class CodingAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.max_tool_calls = 6
+        self.max_tool_calls = 20
         self.client:Client = None
         self.client_session:ClientSession = None
         self.descriptions="Provides documentation for the vue3 with the FDS(Fabric Design system) components"

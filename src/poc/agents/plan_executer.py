@@ -55,7 +55,8 @@ from langchain_core.language_models import BaseChatModel, LanguageModelLike
 from langchain_core.output_parsers import PydanticOutputParser
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.tools import BaseTool
-
+# from langgraph.config import get_stream_writer
+from langchain_core.callbacks.manager import adispatch_custom_event
 import warnings
 
 plan_structure_parser = PydanticOutputParser(pydantic_object=PlanOutputModal)
@@ -68,7 +69,7 @@ plan_prompt="""
         StepModal:
         - step_uid: Unique identifier for this step (generate a UUID or unique string)
         - agent_name: Name of the agent executing this step
-        - instruction: A clear instruction describing what needs to be done in this step
+        - instruction: A clear instruction describing what needs to be done in this step, and specify exactly what information is needed to avoid the unnecessary information from the agent which will overflow the context limit
         - sub_steps: List of sub-steps to be executed within this step
         - available_tools: List of tools or functions that should be used in this step (choose from the available tools)
         - response_from_previous_step: List of step_uid(s) whose responses are required as input for this step (if any)
@@ -76,12 +77,14 @@ plan_prompt="""
         - status: Set to "pending" for all steps in the initial plan
 
         PlanOutputModal:
-        - plan: List of StepModal objects representing the execution steps(keep one plan for each agent, to avoid re-execution of same agent)
+        - plan: List of StepModal objects representing the execution steps(try to keep one step within the plan for each agent, and each agent can execute multiple tool calls in its lifecycle so avoid calling the agent repeatedly just to use single tool from agent instead try to batch the tool calls in same step, to avoid re-execution of same agent)
 
 
         Guidelines:
         - Analyze the user query and break it down into logical, sequential steps.
-        - For each step, specify which agents and set of tools to use.
+        - For each step, specify which agents and set of tools to use and multiple agents are allowed to get the different information's or to get the missing or additional information from different sources.
+        - Important!, after getting the information add one or more additional steps to find and filter the most relevant information for the user query if the information from multiple source acquired.
+        - create step in plan to only extract necessary information based on user query and don't fetch additional information which may not require or may not be much important and each agent can execute multiple tool calls in its lifecycle so avoid calling the agent repeatedly just to use single tool from agent instead try to batch the tool calls in same step, to avoid crossing the context limit because of response from multiple step.
         - If a step depends on the output of a previous step, reference the step_uid(s) in response_from_previous_step.
         - A query generating new response which depends on some response_from_previous_step, in result it might not combine the response_from_previous_step always and its new response. So for the future step try to avoid the chaining response_from_previous_step from one step to another, instead include all the dependent response_from_previous_step for each step
          Example where B dependent on A's response_from_previous_step and C dependent on both A's and B's response_from_previous_step
@@ -93,19 +96,23 @@ plan_prompt="""
         - Don't summaries and don't loose any information from the final response while combining.
         - before combining the responses, first check whether the nature of query required the structured output if its required then first execute structured_output tools then execute the combine_responses tool.
         - While combining response to single final response, if there is a structured output then don't modify the response and keep the structured output intact.
+        - use the tool calls name,descriptions, arguments as additional context to create the steps for the plan.
 
         Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
         - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
+        - if the structured output for code required try to make it as single file application or single component application
         - Don't structure the output if user only ask for documentation or code snippets or example or similar
-        - If the structured response is required and there are multiple chunks of information, for example if its a code implementation and there are multiple code snippets associated with multiple files, then strictly breakdown these into multiple steps and structure them individually and after structuring all the chunks of information finally embed them as list into single response keep the the structures in list intact.
+        - If the structured response is required and there are multiple chunks of information, for example if its a code implementation and there are multiple code snippets associated with multiple files, then strictly breakdown these into multiple steps in the plan and structure them individually and after structuring all the chunks of information then add one more step to finally embed them as list into single response keep the the structures in list intact.
 
         Note:
         - keep in mind that maximum token limit set is around {max_tokens}, so ensure the input to process final conversation is less than the maximum token limit
 
+        think harder.
+
         Available Tools and Agents:
         {tools}
 
-        If structured response for code have to be provided then collect the information for below schema
+        If structured response for code have to be provided, then collect the information to satisfy below schema,:
         {code_structure}
 
         Output Schema:
@@ -150,9 +157,14 @@ class PlanExecuter:
 
         plan=await self.base_llm.with_structured_output(PlanOutputModal).ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=plan_structure_parser.get_format_instructions(),code_structure=code_structure_parser.get_format_instructions(),max_tokens=max_tokens), id=str(uuid.uuid4()))])
 
+        # writer = get_stream_writer()
+        # writer({"event":"plan","data":plan.model_dump_json()})
+        await adispatch_custom_event("plan",{"chunk":{"type":"text","text":plan.model_dump()}},config=config)
+
         return Command(
             update={
-                "plan": plan
+                "plan": plan,
+                "original_messages":state["messages"]
             },
             goto=SupervisorNode.ROUTE_VAL
         )
@@ -170,17 +182,27 @@ class PlanExecuter:
         plans=state["plan"].plan
         for plan in plans:
             if plan.status == "pending":
-                instructions=plan.model_dump_json()
+                instructions=plan.model_dump()
                 print("\n---instructions",instructions)
-                dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
+                dependent_response=[dependent_plan.response.content for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response is not None]
+                try:
+                    dependent_response=[get_buffer_string([dependent_plan.response]) for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
+                except Exception as e:
+                    print(f"Error processing dependent responses: {e}")
                 # total_input_tokens = sum(dependent_plan.response_token_size for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response_token_size is not None)
+                del instructions["step_uid"]
+                del instructions["agent_name"]
+                del instructions["response"]
+                del instructions["response_from_previous_step"]
+                del instructions["response_token_size"]
+                del instructions["status"]
                 return Command(
                     update={
                         "tool_call_count":0,
                         'messages':  [
-                            last_message,
+                            state["original_messages"][0],
                             messages.HumanMessage(content=f"current query: {plan.instruction}",id=str(uuid.uuid4())),
-                            messages.HumanMessage(content=f"complete instructions:\n {instructions} dependent_response={dependent_response}",id=str(uuid.uuid4()))
+                            messages.HumanMessage(content=f"complete instructions:\n {json.dumps(instructions,default=str)}\n\n Depend on the responses(knowledge base):\n{dependent_response}",id=str(uuid.uuid4()))
                         ]
                     },
                     goto=plan.agent_name
@@ -188,9 +210,7 @@ class PlanExecuter:
 
 
         return Command(
-            update={
-                
-            },
+            update={},
             goto=SupervisorNode.END_CONV_VAL
         )
 
@@ -212,7 +232,9 @@ class PlanExecuter:
 
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
          return Command(
-            update={},
+            update={
+                "messages": state["original_messages"] + state["messages"][-1:]
+            },
             goto=END
         )
 
@@ -240,7 +262,7 @@ class PlanExecuter:
 
         builder = StateGraph(ChatState)
         builder.add_node(SupervisorNode.START_CONV_VAL, self.init_conversation)
-        builder.add_node(SupervisorNode.CODING_AGENT_VAL, create_handoff_back_node(coding_agent.graph))
+        builder.add_node(SupervisorNode.CODING_AGENT_VAL, create_handoff_back_node(coding_agent.graph,recursion_limit=100))
         builder.add_node(SupervisorNode.RESEARCH_AGENT_VAL, create_handoff_back_node(research_agent.graph))
         builder.add_node(SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, create_handoff_back_node(structured_output_agent.graph))
         builder.add_node(SupervisorNode.ROUTE_VAL, self.route_node)

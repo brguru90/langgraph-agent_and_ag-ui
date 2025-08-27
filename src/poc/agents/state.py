@@ -30,9 +30,9 @@ class PlanOutputModal(BaseModel):
 class CodeStructure(BaseModel):
     """Schema the software code."""
     code: str = Field(..., description="The code implementation")
-    file_name: str = Field(..., description="The name of the file containing the code")
-    language: str = Field(..., description="The name of programming language of the code")
-    framework: Optional[str] = Field(..., description="Optionally the name of framework used in the code")
+    file_name: str = Field(..., description="The name of the file containing the code(if the information is not there then suggest a file name)")
+    language: str = Field(..., description="The name of programming language of the code(if the information is not there then identify the programming language name)")
+    framework: Optional[str] = Field(..., description="Optionally the name of framework used in the code(if the information is not there then identify the framework name)")
     descriptions: Optional[List[str]] = Field(..., description="Optional descriptions of the code snippet")
 
 class CodeSnippetsStructure(BaseModel):
@@ -48,6 +48,7 @@ class CompletedStep:
 
 class ChatState(AgentState):
     messages: List[BaseMessage]
+    original_messages: NotRequired[List[BaseMessage]]
     tool_call_count: int
     thread_id: str 
     messages_history: List[BaseMessage]
