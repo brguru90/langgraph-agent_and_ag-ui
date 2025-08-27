@@ -10,25 +10,17 @@ from langgraph.store.base import BaseStore
 from .utils import mcp_sampling_handler,get_aws_modal,create_handoff_tool
 from fastmcp import Client
 from langchain_mcp_adapters.tools import load_mcp_tools
-from .state import ChatState,SupervisorNode
+from .state import ChatState,SupervisorNode,CodeSnippetsStructure
 import traceback
 from langgraph.prebuilt import InjectedState,InjectedStore, create_react_agent
 from langchain_core.tools import tool, InjectedToolCallId
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field
+from langchain_core.messages.utils import count_tokens_approximately
+from botocore.config import Config
+from langchain_core.messages.utils import get_buffer_string
+import json
 
-class CodeStructure(BaseModel):
-    """Schema the software code."""
-    code: str = Field(..., description="The code implementation")
-    file_name: str = Field(..., description="The name of the file containing the code")
-    language: str = Field(..., description="The programming language of the code")
-    framework: str = Field(..., description="The framework used in the code")
-    descriptions: List[str] = Field(..., description="Descriptions of the code snippet")
-
-class CodeSnippetsStructure(BaseModel):
-    """Schema the software code."""
-    code_snippets: List[CodeStructure] = Field(..., description="The list of code snippets with file names,language,framework and other relevant information")
-    descriptions: List[str] = Field(..., description="Overall descriptions of the code snippets")
 
 
 code_parser = PydanticOutputParser(pydantic_object=CodeSnippetsStructure)
@@ -61,7 +53,18 @@ def structured_output_for_code() -> CodeSnippetsStructure:
 
     """
 
-    return ""
+    return """
+    Provide the structured output for the code implementations,
+
+    Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
+    - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
+    - Don't structure the output if user only ask for documentation or code snippets or example or similar
+
+    Guidelines:
+    - Include all relevant code snippets, file names, and other contextual information.
+    - Maintain the original formatting and structure of the code as much as possible.
+    - The final code should be executable
+"""
 
 class StructuredOutputAgent:
 
@@ -105,20 +108,42 @@ class StructuredOutputAgent:
     async def structured_output_for_code(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
         """Structured output for code node - only responsible for calling structured_output_for_code tool"""    
         plans=state["plan"].plan
-        structure_code_payload=[]
+        structure_code_payload=[state["messages"][0]]
+        structure_code_payload.extend(state["messages"][-2:])
         for plan in plans:
             if plan.status == "pending":
                 instructions=plan.model_dump_json()
                 dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
                 structure_code_payload.append(    
                     messages.HumanMessage(
-                        content=f"provide structured output for the code implementations for the plan:\n {instructions}, dependent_response={dependent_response}, output_schema={code_parser.get_format_instructions()}",
+                        content=f"""
+                        * provide structured output for the code implementations for the plan:
+
+                        ** Instructions: {instructions},
+                        ** Output Schema(Output response should be STRICTLY needed in the format): {code_parser.get_format_instructions()} 
+                        ** Original Response: {dependent_response}""",
                         id=str(uuid.uuid4())
                     )
                 )
                 break
-        response=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload)
-        
+        # response=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload)
+
+        print(f"\n---- CodeSnippetsStructure, input token count={count_tokens_approximately(structure_code_payload)} ------\n")
+
+        max_retry=3
+        while max_retry > 0:
+            try:
+                response_struct:CodeSnippetsStructure=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload) # include_raw will cause error since it will return tool message without tool call and this can't be used in other agent where this tools in not bind to llm
+                response=messages.HumanMessage(content=response_struct.model_dump_json(indent=2), id=str(uuid.uuid4()))
+                break
+            except Exception as e:
+                traceback.print_exc()
+                traceback.print_stack()
+                with open('plans.json', 'w') as f:
+                    json.dump(structure_code_payload, f, default=str, indent=2)
+                # import pdb; pdb.set_trace()
+            max_retry -= 1
+
         return Command(
             update={
                 'messages': state["messages"] + [response],
@@ -225,7 +250,8 @@ class StructuredOutputAgent:
         """Initialize the agent with MCP tools and LLM"""
         
         # Initialize LLMs
-        self.base_llm = get_aws_modal(additional_model_request_fields=None, temperature=0)
+        config = Config(read_timeout=3600, connect_timeout=60)
+        self.base_llm = get_aws_modal(config=config,model_max_tokens=None,additional_model_request_fields=None, temperature=0)
 
         self.tools = []
         self.tools.append(combine_responses) 

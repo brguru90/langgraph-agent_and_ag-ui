@@ -8,6 +8,7 @@ from langchain_core.runnables.config import RunnableConfig
 from langgraph.store.base import BaseStore
 from .utils import mcp_sampling_handler,get_aws_modal,create_handoff_tool
 from fastmcp import Client
+from mcp import ClientSession
 from langchain_mcp_adapters.tools import load_mcp_tools
 from .state import ChatState,SupervisorNode
 import traceback
@@ -23,9 +24,8 @@ class ResearchAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.client = None
-        self.client_session = None
-        self.client_session_ctx = None
+        self.client:Client = None
+        self.client_session:ClientSession = None
         self.descriptions="provide the generic documentations related to software coding"
 
     def get_steering_tool(self):
@@ -104,7 +104,7 @@ class ResearchAgent:
         """Initialize the agent with MCP tools and LLM"""
         
         # Initialize LLMs
-        self.base_llm = get_aws_modal(additional_model_request_fields=None, temperature=0)
+        self.base_llm = get_aws_modal()
 
         mcp_config={
                 "context7": {
@@ -112,7 +112,7 @@ class ResearchAgent:
                     "transport": "http",
                 }
         }
-        self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)        
+        self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)   
         self.client_session = (await self.client.__aenter__()).session
         self.tools = await load_mcp_tools(self.client_session)        
         if self.tools:
@@ -155,11 +155,11 @@ class ResearchAgent:
             warnings.simplefilter("ignore")
 
             # Close client session first
-            if self.client_session_ctx:
+            if self.client_session:
                 try:
                     print("Closing client session...")
                     await asyncio.wait_for(
-                        self.client_session_ctx.__aexit__(exc_type, exc_val, exc_tb),
+                        self.client_session.__aexit__(exc_type, exc_val, exc_tb),
                         timeout=2.0  # Give it 2 seconds to close gracefully
                     )
                     print("Client session closed successfully")
@@ -168,11 +168,11 @@ class ResearchAgent:
                 except Exception as e:
                     print(f"Error closing client session: {e}")
                 finally:
-                    self.client_session_ctx = None
                     self.client_session = None
             
             # Clean up the main client (no __aexit__ method available)
             if self.client:
+                self.client.close()
                 self.client = None
         
         print("Agent cleanup completed")

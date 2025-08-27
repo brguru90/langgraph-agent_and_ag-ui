@@ -48,7 +48,7 @@ from .coding_agent import CodingAgent
 from .research_agent import ResearchAgent
 from .structured_output import StructuredOutputAgent
 from langgraph_supervisor.handoff import create_forward_message_tool
-from .state import ChatState,SupervisorNode,PlanOutputModal
+from .state import ChatState,SupervisorNode,PlanOutputModal,CodeSnippetsStructure
 from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper,create_handoff_back_node
 from langgraph_supervisor import create_supervisor
 from langchain_core.language_models import BaseChatModel, LanguageModelLike
@@ -58,7 +58,8 @@ from langchain_core.tools import BaseTool
 
 import warnings
 
-parser = PydanticOutputParser(pydantic_object=PlanOutputModal)
+plan_structure_parser = PydanticOutputParser(pydantic_object=PlanOutputModal)
+code_structure_parser = PydanticOutputParser(pydantic_object=CodeSnippetsStructure)
 plan_prompt="""
         You are a supervisor agent responsible for breaking down the user's query into a step-by-step plan for execution. 
 
@@ -82,6 +83,9 @@ plan_prompt="""
         - Analyze the user query and break it down into logical, sequential steps.
         - For each step, specify which agents and set of tools to use.
         - If a step depends on the output of a previous step, reference the step_uid(s) in response_from_previous_step.
+        - A query generating new response which depends on some response_from_previous_step, in result it might not combine the response_from_previous_step always and its new response. So for the future step try to avoid the chaining response_from_previous_step from one step to another, instead include all the dependent response_from_previous_step for each step
+         Example where B dependent on A's response_from_previous_step and C dependent on both A's and B's response_from_previous_step
+         so instead of A -> B, B -> C consider A-> B, (A,B) -> C
         - Do not execute the steps; only generate the plan.
         - Output only the structured plan as per the schema above.
         - If the multiple user queries provided or the multiple steps involved with related response, then add one or more steps to combine the response or conclude the response meaningfully into single final response.
@@ -93,9 +97,16 @@ plan_prompt="""
         Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
         - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
         - Don't structure the output if user only ask for documentation or code snippets or example or similar
+        - If the structured response is required and there are multiple chunks of information, for example if its a code implementation and there are multiple code snippets associated with multiple files, then strictly breakdown these into multiple steps and structure them individually and after structuring all the chunks of information finally embed them as list into single response keep the the structures in list intact.
+
+        Note:
+        - keep in mind that maximum token limit set is around {max_tokens}, so ensure the input to process final conversation is less than the maximum token limit
 
         Available Tools and Agents:
         {tools}
+
+        If structured response for code have to be provided then collect the information for below schema
+        {code_structure}
 
         Output Schema:
         {output_schema}        
@@ -113,7 +124,7 @@ class PlanExecuter:
         self.agents=[]
         self.system_message="""
             - You are an supervisor agent, responsible for overseeing and managing other agents.
-            - Decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message or you can get the user original queries back by calling "get_user_original_queries" tool.
+            - Decide the required tool call to execute agent at the beginning and don't forget to execute planned agents and may be you can understanding each agent by executing first it with dummy query or any /help command like query and list all the available tool for planning then start real execution with real query may be you can retry the original user query usually it will be first message.
             - Avoid re-executing of same agent unless the some additional information is required
             - Your primary role is to delegate tasks to specialized agents based on the user's requests and the context of the conversation.
             - you can use multiple tools and agents to achieve the desired outcome.
@@ -137,7 +148,7 @@ class PlanExecuter:
                 "tools":[{"name":tool.name,"description":tool.description,"args":tool.args} for tool in agent_tools]
             })
 
-        plan=await self.base_llm.with_structured_output(PlanOutputModal).ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=parser.get_format_instructions()), id=str(uuid.uuid4()))])
+        plan=await self.base_llm.with_structured_output(PlanOutputModal).ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=plan_structure_parser.get_format_instructions(),code_structure=code_structure_parser.get_format_instructions(),max_tokens=max_tokens), id=str(uuid.uuid4()))])
 
         return Command(
             update={
@@ -162,8 +173,10 @@ class PlanExecuter:
                 instructions=plan.model_dump_json()
                 print("\n---instructions",instructions)
                 dependent_response=[dependent_plan.response for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
+                # total_input_tokens = sum(dependent_plan.response_token_size for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response_token_size is not None)
                 return Command(
                     update={
+                        "tool_call_count":0,
                         'messages':  [
                             last_message,
                             messages.HumanMessage(content=f"current query: {plan.instruction}",id=str(uuid.uuid4())),
@@ -176,7 +189,7 @@ class PlanExecuter:
 
         return Command(
             update={
-                "tool_call_count":0,
+                
             },
             goto=SupervisorNode.END_CONV_VAL
         )
@@ -187,6 +200,7 @@ class PlanExecuter:
             if plan.status == "pending":
                 plan.status="completed"
                 plan.response=state["messages"][-1]
+                plan.response_token_size=count_tokens_approximately([plan.response]) 
                 break
         state["plan"].plan=plans
         return Command(

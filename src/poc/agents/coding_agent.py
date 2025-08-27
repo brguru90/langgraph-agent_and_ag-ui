@@ -17,6 +17,7 @@ from fastmcp.client.sampling import (
     SamplingParams,
     RequestContext,
 )
+from mcp import ClientSession
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command, interrupt
 from langchain_core.runnables.config import RunnableConfig
@@ -57,6 +58,8 @@ class CodingAgent:
         self.tool_node = None
         self.graph = None
         self.max_tool_calls = 6
+        self.client:Client = None
+        self.client_session:ClientSession = None
         self.descriptions="Provides documentation for the vue3 with the FDS(Fabric Design system) components"
 
     def get_steering_tool(self):
@@ -233,11 +236,11 @@ class CodingAgent:
             warnings.simplefilter("ignore")
 
             # Close client session first
-            if self.client_session_ctx:
+            if self.client_session:
                 try:
                     print("Closing client session...")
                     await asyncio.wait_for(
-                        self.client_session_ctx.__aexit__(exc_type, exc_val, exc_tb),
+                        self.client_session.__aexit__(exc_type, exc_val, exc_tb),
                         timeout=2.0  # Give it 2 seconds to close gracefully
                     )
                     print("Client session closed successfully")
@@ -246,11 +249,12 @@ class CodingAgent:
                 except Exception as e:
                     print(f"Error closing client session: {e}")
                 finally:
-                    self.client_session_ctx = None
+                    self.client_session = None
                     self.client_session = None
             
             # Clean up the main client (no __aexit__ method available)
             if self.client:
+                self.client.close()
                 self.client = None
         
         print("Agent cleanup completed")

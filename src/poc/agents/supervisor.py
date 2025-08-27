@@ -469,8 +469,6 @@ Then call the store_messages tool with meaningful content and context parameters
         # Initialize messages if not already set
         print("\n--state--", state)
 
-        state["plan_executed"]=False        
-          
         # Initialize messages_history if not already set
         if not state.get("messages_history"):
             state["messages_history"] = []
@@ -509,6 +507,8 @@ Then call the store_messages tool with meaningful content and context parameters
                 'tool_call_count': 0,
                 'thread_id': config["configurable"]["thread_id"],
                 "messages_history": state.get("messages_history", []),
+                "plan_executed":False,
+                "plan":[]
             },
             goto=SupervisorNode.LLM_VAL
         )
@@ -542,8 +542,14 @@ Then call the store_messages tool with meaningful content and context parameters
 
         updated_messages=state["messages"]
 
+        for msg in updated_messages:
+            if not hasattr(msg, 'id') or msg.id is None:
+                msg.id = str(uuid.uuid4())
+
         return Command(
-            update={},
+            update={
+                "messages":updated_messages
+            },
             goto=END
         )
 

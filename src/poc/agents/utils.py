@@ -40,6 +40,7 @@ from langgraph._internal._runnable import RunnableCallable
 from langchain_core.runnables import RunnableConfig
 from uuid import UUID, uuid5
 from langgraph._internal._config import patch_configurable
+from botocore.config import Config
 
 
 # claude-sonnet-4 -> supports upto 200k tokens
@@ -57,15 +58,16 @@ thinking_params = {
     }
 }
 
-def get_aws_modal(model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=None,**kwargs):
+def get_aws_modal(model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",config:Config=None,model_max_tokens=max_tokens,temperature=0.5,additional_model_request_fields=None,**kwargs):
     return ChatBedrockConverse(
-        model_id="us.anthropic.claude-sonnet-4-20250514-v1:0", 
+        config=config,
+        model_id=model_id, 
         # model_id="openai.gpt-oss-120b-1:0", 
         region_name="us-west-2", 
         credentials_profile_name="llm-sandbox",
         temperature=1 if additional_model_request_fields else temperature,
         max_tokens=model_max_tokens, 
-        additional_model_request_fields=additional_model_request_fields,
+        additional_model_request_fields=additional_model_request_fields,        
         **kwargs
     )
     # return ChatOllama(
