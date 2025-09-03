@@ -114,7 +114,7 @@ function App() {
       />
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      <div style={{ flexGrow: 1,  display: "flex", flexDirection: "column" }}>
         {/* Header */}
         <ChatHeader
           sidebarOpen={sidebarOpen}

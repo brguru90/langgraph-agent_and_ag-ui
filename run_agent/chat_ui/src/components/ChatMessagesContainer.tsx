@@ -2,6 +2,7 @@ import type { ChatDisplayMessage, GroupedChatDisplayMessage } from "../types";
 import { InterruptMessageComponent } from "./InterruptMessageComponent";
 import { ToolCallGroupComponent } from "./ToolCallGroupComponent";
 import { RegularMessageGroupComponent } from "./RegularMessageGroupComponent";
+import { CodeMessageComponent } from "./CodeMessageComponent";
 import { useEffect } from "react";
 
 interface ChatMessagesContainerProps {
@@ -57,6 +58,8 @@ export function ChatMessagesContainer({
         backgroundColor: "#f8f9fa",
         display: "flex",
         flexDirection: "column",
+        flexShrink:1,
+        flexGrow:1,
       }}
     >
       <div style={{ flex: 1, padding: "15px" }} className="chat_wrapper">
@@ -79,7 +82,7 @@ export function ChatMessagesContainer({
             );
           } else if (group.group_type === 'code') {
             return (
-              <RegularMessageGroupComponent
+              <CodeMessageComponent
                 key={group.id}
                 messages={group.messages}
               />

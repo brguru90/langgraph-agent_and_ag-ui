@@ -150,8 +150,10 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
             async for transformed_event in event_transformer.transform_events(__event):
                 if transformed_event:
                     yield transformed_event           
-        yield event_transformer.end_events()      
-               
+        for end_event in event_transformer.end_events():
+            if end_event:
+                yield end_event
+
     except Exception as e:
         print(f"Error in handle_agent_events: {e}", e)
         traceback.print_exc()

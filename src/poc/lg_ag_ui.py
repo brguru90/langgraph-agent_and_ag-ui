@@ -57,6 +57,10 @@ class LangGraphToAgUi:
         self.unparsed_events={}
         self.filtered_event=None
         self.track_event:Dict[str,TrackEvent]={} # mostly all events are sequential except tool calls
+        
+        # Buffer for tool events per run_id
+        self.tool_event_buffer: Dict[str, List[Any]] = {}
+        self.active_tool_runs: Dict[str, bool] = {}
 
     def __get_filtered_data(self,event):
         if "event" in event:
@@ -233,30 +237,50 @@ class LangGraphToAgUi:
         ac_events=[]
         if not isinstance(event.get("data",{}).get("chunk",{}),langchain_messages.BaseMessage):
             if event["event"]=="on_tool_start":
-                self.ref["wrap_status"]="started"
-                self.ref["last_type"]="tool_call"
-                ac_events.append(ToolCallStartEvent(
+                run_id = event["run_id"]
+                # Initialize buffer for this tool run
+                self.tool_event_buffer[run_id] = []
+                self.active_tool_runs[run_id] = True
+                
+                # Buffer the tool start event
+                tool_start_event = ToolCallStartEvent(
                     type=EventType.TOOL_CALL_START,
                     tool_call_name=event["name"],
-                    tool_call_id=event["run_id"] or"",
+                    tool_call_id=run_id,
                     raw_event=event
-                ))
-                ac_events.append(ToolCallArgsEvent(
+                )
+                self.tool_event_buffer[run_id].append(tool_start_event)
+                
+                tool_args_event = ToolCallArgsEvent(
                     type=EventType.TOOL_CALL_ARGS,
                     delta=json.dumps(event["data"]["input"], default=str),
-                    tool_call_id=event["run_id"] or "",
+                    tool_call_id=run_id,
                     raw_event=event
-                ))
+                )
+                self.tool_event_buffer[run_id].append(tool_args_event)
+                
             elif event["event"]=="on_tool_end":
-                self.ref["wrap_status"]="ended"
-                self.ref["last_id"]=None
-                self.ref["last_type"]="tool_call"
-                tool_message:langchain_messages.ToolMessage=event["data"]["output"]
-                ac_events.append(ToolCallEndEvent(
+                run_id = event["run_id"]
+                
+                # Buffer the tool end event
+                tool_end_event = ToolCallEndEvent(
                     type=EventType.TOOL_CALL_END,
-                    tool_call_id=event["run_id"] or "",
+                    tool_call_id=run_id,
                     raw_event=event
-                ))
+                )
+                
+                # If this run_id exists in buffer, add end event and return all buffered events
+                if run_id in self.tool_event_buffer:
+                    self.tool_event_buffer[run_id].append(tool_end_event)
+                    # Return all buffered events for this run_id
+                    ac_events.extend(self.tool_event_buffer[run_id])
+                    # Clean up buffer
+                    del self.tool_event_buffer[run_id]
+                    self.active_tool_runs.pop(run_id, None)
+                else:
+                    # Fallback: just add the end event if buffer doesn't exist
+                    ac_events.append(tool_end_event)
+                
             elif event.get("data",{}).get("chunk",{}).get("__interrupt__",False):
                 _interrupt:Interrupt= event["data"]["chunk"]["__interrupt__"]
                 ac_events.append(CustomEvent(
@@ -292,30 +316,46 @@ class LangGraphToAgUi:
                 yield transformed_event
 
     def __end_events(self):
+        # Handle any remaining buffered tool events
+        remaining_events = []
+        for run_id, buffered_events in self.tool_event_buffer.items():
+            print(f"Warning: Tool run {run_id} did not complete properly, flushing buffered events")
+            remaining_events.extend(buffered_events)
+        
+        # Clear all buffers
+        self.tool_event_buffer.clear()
+        self.active_tool_runs.clear()
+        
         if self.ref["wrap_status"]=="started":
             if self.ref["last_type"]=="text":
-                return TextMessageEndEvent(
+                end_event = TextMessageEndEvent(
                     type=EventType.TEXT_MESSAGE_END,
                     message_id=self.ref["last_id"] or ""
                 )
+                remaining_events.append(end_event)
             elif self.ref["last_type"]=="tool_use":
-                return CustomEvent(
+                end_event = CustomEvent(
                     type=EventType.CUSTOM,
                     name=self.ref["last_type"],
                     value={"text":"","type":EventType.TEXT_MESSAGE_END,"message_id":self.ref["last_id"] or ""}
                 )
+                remaining_events.append(end_event)
             else:
                 print("Unhandled end event type:", self.ref["last_type"])
-                return RawEvent(
+                end_event = RawEvent(
                     type=EventType.RAW,
                     event=f"Unhandled end event type: {self.ref['last_type']}"
                 )
+                remaining_events.append(end_event)
         else:
-            print("No active wrap status to end:", self.ref["wrap_status"])
-            return RawEvent(
-                type=EventType.RAW,
-                event="No active wrap status to end"
-            )
+            if not remaining_events:
+                print("No active wrap status to end:", self.ref["wrap_status"])
+                remaining_events.append(RawEvent(
+                    type=EventType.RAW,
+                    event="No active wrap status to end"
+                ))
+        for remaining_event in remaining_events:
+            yield remaining_event
 
     def end_events(self):
         data=self.__end_events()

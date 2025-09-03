@@ -38,6 +38,7 @@ class CodeStructure(BaseModel):
     file_name: str = Field(..., description="The name of the file containing the code(if the information is not there then suggest a file name) Example: app.py, main.js, index.html, button_component.tsx, app.tsx, button_variant_disabled.vue")
     language: str = Field(..., description="The name of programming language of the code(if the information is not there then identify the programming language name) Example: javascript,typescript,python,c++.java,golang")
     framework: Optional[str] = Field(..., description="Optionally the name of framework used in the code(if the information is not there then identify the framework name) Example: Vue3,React JS,React TS, Angular, Flask, Springboot, QT")
+    pluggable_live_preview_component: Optional[str] = Field(..., description="Optionally suggest name of library can be used for live preview if applicable for the current standalone code snippet. Example: vue3-sfc-loader for vue3 SFC, etc")
     descriptions: Optional[List[str]] = Field(..., description="Optional descriptions of the code snippet")
 
 class CodeSnippetsStructure(BaseModel):

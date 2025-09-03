@@ -59,7 +59,22 @@ export interface ChatDisplayMessage {
   };
   codeData?: {
     message_id: string;
+    codeContent?: CodeContent;
   };
+}
+
+export interface CodeSnippet {
+  code: string;
+  file_name: string;
+  language: string;
+  framework: string;
+  pluggable_live_preview_component?: string;
+  descriptions: string[];
+}
+
+export interface CodeContent {
+  code_snippets: CodeSnippet[];
+  descriptions: string[];
 }
 
 export interface GroupedChatDisplayMessage {

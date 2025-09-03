@@ -16,10 +16,9 @@ import type {
   TokenUsage,
   MessageEvent,
   GroupedChatDisplayMessage,
+  CodeContent,
 } from "../types";
 import { INTERRUPT_EVENT } from "../types";
-import { getAgentState } from "../services/api";
-import { mapStateMessagesToAGUI } from "../services/messageMapper";
 import { randomUUID } from "../utils";
 
 export interface UseAgentService {
@@ -74,8 +73,10 @@ export const getMessagesByType = (
  * The grouping algorithm:
  * 1. Only processes messages with IDs greater than lastProcessedId for efficiency
  * 2. Groups messages by message_type ("assistance", "tool", "interrupt", "user", "code")
- * 3. Tracks partial state - true for incomplete messages, false for complete ones
- * 4. Handles three block types:
+ * 3. For tool calls: only groups consecutive tool calls (not all tool calls together)
+ * 4. For other message types: groups all messages of the same type
+ * 5. Tracks partial state - true for incomplete messages, false for complete ones
+ * 6. Handles three block types:
  *    - "start": Creates new group, marks as partial
  *    - "content": Updates existing group or creates new one for standalone content
  *    - "end": Marks group as complete (partial = false)
@@ -123,19 +124,34 @@ export const useAgentService = (): UseAgentService => {
           : parseInt(String(message.id));
 
       // Find existing partial group for this message type
-      const existingGroup = currentGroups.find(
-        (group) => group.group_type === messageType && group.partial
-      );
+      // For tool calls, only group consecutive ones by checking if the last group is of the same type
+      const shouldGroupWithPrevious = (() => {
+        if (messageType !== "tool") {
+          // For non-tool messages, use existing logic
+          return currentGroups.find(
+            (group) => group.group_type === messageType && group.partial
+          );
+        }
+        
+        // For tool messages, only group if the last group is also a partial tool group
+        const lastGroup = currentGroups[currentGroups.length - 1];
+        return lastGroup && 
+               lastGroup.group_type === "tool" && 
+               lastGroup.partial ? lastGroup : null;
+      })();
 
       if (message.block === "start") {
         // Start of a new message block - create new group or mark existing as partial
-        const currentExistingGroup = currentGroups.find(
-          (group) => group.group_type === messageType && group.partial
-        );
+        if (messageType !== "tool") {
+          // For non-tool messages, complete any existing partial group of the same type
+          const currentExistingGroup = currentGroups.find(
+            (group) => group.group_type === messageType && group.partial
+          );
 
-        if (currentExistingGroup && currentExistingGroup.partial) {
-          // Complete the previous partial group
-          currentExistingGroup.partial = false;
+          if (currentExistingGroup && currentExistingGroup.partial) {
+            // Complete the previous partial group
+            currentExistingGroup.partial = false;
+          }
         }
 
         // Create new group for this message
@@ -148,8 +164,8 @@ export const useAgentService = (): UseAgentService => {
         currentGroups.push(newGroup);
       } else if (message.block === "content") {
         // Content of ongoing message - add to existing group or create new one
-        if (!existingGroup) {
-          // No existing partial group, create new one (for standalone content messages)
+        if (!shouldGroupWithPrevious) {
+          // No existing partial group to group with, create new one (for standalone content messages)
           const newGroup: GroupedChatDisplayMessage = {
             id: messageId,
             messages: [message],
@@ -159,31 +175,31 @@ export const useAgentService = (): UseAgentService => {
           currentGroups.push(newGroup);
         } else {
           // Add to existing partial group
-          const existingMessageIndex = existingGroup.messages.findIndex(
+          const existingMessageIndex = shouldGroupWithPrevious.messages.findIndex(
             (msg) => msg.id === message.id
           );
           if (existingMessageIndex >= 0) {
             // Update existing message in group
-            existingGroup.messages[existingMessageIndex] = message;
+            shouldGroupWithPrevious.messages[existingMessageIndex] = message;
           } else {
             // Add new message to group
-            existingGroup.messages.push(message);
+            shouldGroupWithPrevious.messages.push(message);
           }
         }
       } else if (message.block === "end") {
         // End of message block - mark group as complete
-        if (existingGroup) {
-          const existingMessageIndex = existingGroup.messages.findIndex(
+        if (shouldGroupWithPrevious) {
+          const existingMessageIndex = shouldGroupWithPrevious.messages.findIndex(
             (msg) => msg.id === message.id
           );
           if (existingMessageIndex >= 0) {
             // Update existing message in group
-            existingGroup.messages[existingMessageIndex] = message;
+            shouldGroupWithPrevious.messages[existingMessageIndex] = message;
           } else {
             // Add final message to group
-            existingGroup.messages.push(message);
+            shouldGroupWithPrevious.messages.push(message);
           }
-          existingGroup.partial = false;
+          shouldGroupWithPrevious.partial = false;
         } else {
           // No existing group, create completed group
           const newGroup: GroupedChatDisplayMessage = {
@@ -239,12 +255,12 @@ export const useAgentService = (): UseAgentService => {
                 return messages_ids.current-1;
               case "code": {
                 const codeEvent = customEvent.value;
+                console.log("code===>",customEvent.name,codeEvent.type)
                 if (codeEvent.type === "code_start") {
                   messages_ref.current.push({
                     id: messages_ids.current++,
                     message_type: "code",
                     block: "start",
-                    content: "",
                     codeData: {
                       message_id: codeEvent.message_id,
                     },
@@ -260,9 +276,45 @@ export const useAgentService = (): UseAgentService => {
                       msg.codeData?.message_id === codeEvent.message_id
                     );
                   if (lastCodeMessage) {
-                    lastCodeMessage.content = codeEvent.text || "";
                     lastCodeMessage.block = "content";
+                    
+                    // Parse the JSON content and store as object
+                    if (codeEvent.text && lastCodeMessage.codeData) {
+                      try {
+                        const parsedContent: CodeContent = JSON.parse(codeEvent.text);
+                        lastCodeMessage.codeData.codeContent = parsedContent;
+                      } catch (error) {
+                        console.error("Failed to parse code content as JSON:", error);
+                        // Keep the original text if JSON parsing fails
+                        lastCodeMessage.content = codeEvent.text || "";
+                      }
+                    }
+                    
                     return lastCodeMessage.id as number;
+                  } else {
+                    // If no matching code_start message found, create a new code message
+                    const newCodeData: ChatDisplayMessage["codeData"] = {
+                      message_id: codeEvent.message_id,
+                    };
+                    
+                    // Parse the JSON content and store as object
+                    if (codeEvent.text) {
+                      try {
+                        const parsedContent: CodeContent = JSON.parse(codeEvent.text);
+                        newCodeData.codeContent = parsedContent;
+                      } catch (error) {
+                        console.error("Failed to parse code content as JSON:", error);
+                        // Continue without parsed content if JSON parsing fails
+                      }
+                    }
+                    
+                    messages_ref.current.push({
+                      id: messages_ids.current++,
+                      message_type: "code",
+                      block: "content",
+                      codeData: newCodeData,
+                    });
+                    return messages_ids.current-1;
                   }
                 } else if (codeEvent.type === "code_end") {
                   // Find the last code message with matching message_id and mark as complete
@@ -276,6 +328,17 @@ export const useAgentService = (): UseAgentService => {
                   if (lastCodeMessage) {
                     lastCodeMessage.block = "end";          
                     return lastCodeMessage.id as number;
+                  } else {
+                    // If no matching code message found, create a new completed code message
+                    messages_ref.current.push({
+                      id: messages_ids.current++,
+                      message_type: "code",
+                      block: "end",
+                      codeData: {
+                        message_id: codeEvent.message_id,
+                      },
+                    });
+                    return messages_ids.current-1;
                   }
                 }
                 return -1;
@@ -578,15 +641,14 @@ export const useAgentService = (): UseAgentService => {
                 },
                 onTextMessageContentEvent({ event }) {
                   // console.log(JSON.stringify(event, null, 2));
-                  console.log(event.delta);
+                  // console.log(event.delta);
                   pushMessages(event);
                 },
                 onTextMessageEndEvent(event) {
-                  console.log("");
                   pushMessages(event.event);
                 },
                 onRawEvent({event}){
-                  console.log("📡 Raw event:", event,typeof(event.event));
+                  // console.log("📡 Raw event:", event,typeof(event.event));
                   
                   // Handle tool call events via raw events
                   if (event.event && typeof event.event === 'object') {
@@ -604,7 +666,6 @@ export const useAgentService = (): UseAgentService => {
                         rawEventData.name,
                         rawEventData.run_id
                       );
-                      console.log("tool==>", rawEventData.name);
                       
                       // Create a synthetic tool call start event for compatibility
                       const syntheticEvent: ToolCallStartEvent = {
@@ -619,8 +680,7 @@ export const useAgentService = (): UseAgentService => {
                     
                     // Handle tool end event
                     else if (rawEventData.event === 'on_tool_end') {
-                      console.log("🔧 Tool call end (raw):", rawEventData.run_id);
-                      console.log("tool==>", rawEventData.name);
+                      console.log("🔧 Tool call end (raw):", rawEventData.name,rawEventData.run_id);
                       
                       // Extract tool result content
                       let toolResult = '';
@@ -632,8 +692,7 @@ export const useAgentService = (): UseAgentService => {
                         }
                       }
                       
-                      console.log("🔍 Tool call result (raw):", toolResult);
-                      console.log("tool==>", toolResult);
+                      console.log("🔍 Tool call result (raw):");
                       
                       // Create synthetic tool call end and result events for compatibility
                       const syntheticEndEvent: ToolCallEndEvent = {
@@ -662,7 +721,7 @@ export const useAgentService = (): UseAgentService => {
                   console.error("❌ Run failed:", error);
                 },
                 async onCustomEvent({ event }) {
-                  console.log("📋 Custom event received:", event.name);
+                  // console.log("📋 Custom event received:", event.name);
                   if (event.name === "on_interrupt") {
                     try {
                       const userChoice = await handleInterrupt(event.value?.text ?? event.value);
@@ -698,6 +757,10 @@ export const useAgentService = (): UseAgentService => {
                       }
                       reject(new Error(`Interrupt handling failed: ${error}`));
                     }
+                  }
+                  else if(event.name==="code"){
+                    console.log("custom===>",event.name,event.type)
+                    pushMessages(event)
                   }
                 },
                 onRunErrorEvent(error) {

@@ -30,6 +30,8 @@ export function ChatHistorySidebar({
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
+        flexShrink: 0,
+        flexGrow: 0,
       }}
     >
       <div

@@ -104,7 +104,8 @@ plan_prompt="""
         - before combining the responses, first check whether the nature of query required the structured output if its required then first execute structured_output tools then execute the combine_responses tool.
         - While combining response to single final response, if there is a structured output then don't modify the response and keep the structured output intact.
         - use the tool calls name,descriptions, arguments as additional context to create the steps for the plan.
-        - if the user query related to software programming/coding and user asking to build or implement a code then try to look is there any way to provide code so it can be executed independently and support live preview feature if any.
+        - if the user query related to software programming/coding and user asking to build or implement a code then try to look is there any way to provide code so it can be executed independently and support live preview feature if any but don't include the code to setup live preview and only provide the code implementation which can plugged to live preview feature by client side tools.
+        - use rich markdown formatting to enhance the readability of content.
 
         Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
         - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
@@ -192,7 +193,7 @@ class PlanExecuter:
             }], 
             id=str(uuid.uuid4()),
             additional_kwargs={
-                "plan":True
+                "output":True
             }
         )
         await adispatch_custom_event("plan",{"chunk":response},config=config)

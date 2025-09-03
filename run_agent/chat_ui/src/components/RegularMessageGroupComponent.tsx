@@ -57,8 +57,8 @@ export function RegularMessageGroupComponent({ messages }: RegularMessageGroupCo
         <div style={{ 
           fontSize: "14px", 
           lineHeight: "1.4", 
-          whiteSpace: "pre-wrap",
-          marginBottom: hasToolCalls ? "10px" : "0"
+          marginBottom: hasToolCalls ? "10px" : "0",
+          maxWidth: "1000px",
         }}>
         <ReactMarkdown 
           children={combinedContent} 

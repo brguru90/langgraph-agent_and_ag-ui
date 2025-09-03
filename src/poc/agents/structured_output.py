@@ -99,7 +99,7 @@ class StructuredOutputAgent:
             )
         )
         response=await self.base_llm.ainvoke(get_buffer_string(combine_response_payload))
-        
+
         return Command(
             update={
                 'messages': state["messages"] + [response],
@@ -133,7 +133,7 @@ class StructuredOutputAgent:
                     content=response_struct.model_dump_json(indent=2), 
                     id=str(uuid.uuid4()),
                     additional_kwargs={
-                        "code_block":True
+                        "output":True
                     }
                 )
                 custom_response=messages.BaseMessage(
@@ -144,18 +144,19 @@ class StructuredOutputAgent:
                     }], 
                     id=str(uuid.uuid4()),
                     additional_kwargs={
-                        "code_block":True
+                        "output":True
                     }
                 )
                 await adispatch_custom_event("structured_output",{"chunk":custom_response},config=config)
                 break
             except Exception as e:
-                traceback.print_exc()
-                traceback.print_stack()
+                print(f"Error in structured_output_for_code: {e}\n", structure_code_payload)
+                # traceback.print_exc()
+                # traceback.print_stack()
                 with open('plans.json', 'w') as f:
                     json.dump(structure_code_payload, f, default=str, indent=2)
                 # import pdb; pdb.set_trace()
-                structure_code_payload=await self.base_llm.ainvoke(get_buffer_string(structure_code_payload))
+                structure_code_payload=[await self.base_llm.ainvoke(get_buffer_string(structure_code_payload))]
               
             max_retry -= 1
 
