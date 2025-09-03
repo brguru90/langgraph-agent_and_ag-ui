@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ChatDisplayMessage } from "../types";
 
 interface ToolCallGroupComponentProps {
@@ -5,6 +6,21 @@ interface ToolCallGroupComponentProps {
 }
 
 export function ToolCallGroupComponent({ messages }: ToolCallGroupComponentProps) {
+  const [collapsedStates, setCollapsedStates] = useState<Record<string, { input: boolean; output: boolean }>>({});
+
+  const toggleCollapse = (toolCallId: string, type: 'input' | 'output') => {
+    setCollapsedStates(prev => ({
+      ...prev,
+      [toolCallId]: {
+        ...prev[toolCallId],
+        [type]: !(prev[toolCallId]?.[type] ?? true)
+      }
+    }));
+  };
+
+  const isCollapsed = (toolCallId: string, type: 'input' | 'output') => {
+    return collapsedStates[toolCallId]?.[type] ?? true; // Default to collapsed
+  };
   return (
     <div
       style={{
@@ -59,34 +75,70 @@ export function ToolCallGroupComponent({ messages }: ToolCallGroupComponentProps
                   </div>
                   {toolCall.args && (
                     <div style={{ color: "#451a03", marginBottom: "5px" }}>
-                      <strong>Input:</strong>
-                      <pre style={{ 
-                        margin: "4px 0", 
-                        padding: "4px", 
-                        backgroundColor: "#fff", 
-                        borderRadius: "4px",
-                        fontSize: "11px",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word"
-                      }}>
-                        {toolCall.args}
-                      </pre>
+                      <div style={{ 
+                        display: "flex", 
+                        alignItems: "center", 
+                        marginBottom: "5px",
+                        cursor: "pointer"
+                      }}
+                      onClick={() => toggleCollapse(toolCall.id, 'input')}>
+                        <strong>Input:</strong>
+                        <span style={{ 
+                          marginLeft: "8px", 
+                          fontSize: "10px",
+                          transform: isCollapsed(toolCall.id, 'input') ? "rotate(-90deg)" : "rotate(0deg)",
+                          transition: "transform 0.2s ease"
+                        }}>
+                          ▼
+                        </span>
+                      </div>
+                      {!isCollapsed(toolCall.id, 'input') && (
+                        <pre style={{ 
+                          margin: "4px 0", 
+                          padding: "4px", 
+                          backgroundColor: "#fff", 
+                          borderRadius: "4px",
+                          fontSize: "11px",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word"
+                        }}>
+                          {toolCall.args}
+                        </pre>
+                      )}
                     </div>
                   )}
                   {toolCall.result && (
                     <div style={{ color: "#451a03" }}>
-                      <strong>Output:</strong>
-                      <pre style={{ 
-                        margin: "4px 0", 
-                        padding: "4px", 
-                        backgroundColor: "#fff", 
-                        borderRadius: "4px",
-                        fontSize: "11px",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word"
-                      }}>
-                        {toolCall.result}
-                      </pre>
+                      <div style={{ 
+                        display: "flex", 
+                        alignItems: "center", 
+                        marginBottom: "5px",
+                        cursor: "pointer"
+                      }}
+                      onClick={() => toggleCollapse(toolCall.id, 'output')}>
+                        <strong>Output:</strong>
+                        <span style={{ 
+                          marginLeft: "8px", 
+                          fontSize: "10px",
+                          transform: isCollapsed(toolCall.id, 'output') ? "rotate(-90deg)" : "rotate(0deg)",
+                          transition: "transform 0.2s ease"
+                        }}>
+                          ▼
+                        </span>
+                      </div>
+                      {!isCollapsed(toolCall.id, 'output') && (
+                        <pre style={{ 
+                          margin: "4px 0", 
+                          padding: "4px", 
+                          backgroundColor: "#fff", 
+                          borderRadius: "4px",
+                          fontSize: "11px",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word"
+                        }}>
+                          {toolCall.result}
+                        </pre>
+                      )}
                     </div>
                   )}
                 </div>

@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from typing import List,TypedDict,Any,Optional
+from typing import List,TypedDict,Any,Optional,Dict
 from typing_extensions import NotRequired
 from .agents.supervisor import MyAgent,ChatState  # Import your agent definition
 # from .patched_langgraph_agent import PatchedLangGraphAgent as LangGraphAgent,add_langgraph_fastapi_endpoint
@@ -134,7 +134,7 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
                         "input":{"resume":cmd.resume}
                     }
                 }
-            if __event.get("data") and __event["data"].get("input") and not isinstance(__event["data"]["input"],List) and not isinstance(event["data"]["input"],messages.BaseMessage) and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
+            if __event.get("data") and __event["data"].get("input") and isinstance(__event["data"]["input"],dict) and __event["data"]["input"].get("store") is not None:  # encoder throws error because store will have checkpointer object
                 # event["data"]["input"]["store"] = "Accessing to store information"
                 __event={
                     **__event,

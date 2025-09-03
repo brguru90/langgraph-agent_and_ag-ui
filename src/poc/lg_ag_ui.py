@@ -190,13 +190,29 @@ class LangGraphToAgUi:
                         name=_type,
                         value= {"text":reasoning_text,"type":EventType.THINKING_TEXT_MESSAGE_CONTENT,"message_id":"reasoning_content_"+event["run_id"]}
                     ))   
+            elif _type=="code" or _type=="plan":
+                ac_events.append(CustomEvent(
+                    type=EventType.CUSTOM,
+                    name=_type,
+                    value= {"type":_type+"_start","message_id":_type+"_"+event["run_id"]}
+                ))   
+                ac_events.append(CustomEvent(
+                    type=EventType.CUSTOM,
+                    name=_type,
+                    value= {"text":_content.get("text",{}),"type":_type,"message_id":_type+"_"+event["run_id"]}
+                ))   
+                ac_events.append(CustomEvent(
+                    type=EventType.CUSTOM,
+                    name=_type,
+                    value= {"type":_type+"_end","message_id":_type+"_"+event["run_id"]}
+                ))
             else:
                 print("Unhandled chunk type:", _type, _content)
         return ac_events
     
     def __process_chunks(self,event):
         chunks=[]
-        if event["event"]=="on_chat_model_stream": # if its still chunk, close other type if any before creating new chunk
+        if event["event"]=="on_chat_model_stream" or event["event"]=="on_custom_event": # if its still chunk, close other type if any before creating new chunk
             base_message:langchain_messages.BaseMessage=event.get("data",{}).get("chunk",{})  
             _contents=base_message.content
             for i in range(len(_contents)):

@@ -184,7 +184,18 @@ class PlanExecuter:
 
         # writer = get_stream_writer()
         # writer({"event":"plan","data":plan.model_dump_json()})
-        await adispatch_custom_event("plan",{"chunk":{"type":"text","text":plan.model_dump()}},config=config)
+        response=messages.BaseMessage(
+            type="plan",
+            content=[{
+                "type":"plan",
+                "text":plan.model_dump_json(indent=2)
+            }], 
+            id=str(uuid.uuid4()),
+            additional_kwargs={
+                "plan":True
+            }
+        )
+        await adispatch_custom_event("plan",{"chunk":response},config=config)
 
         return Command(
             update={

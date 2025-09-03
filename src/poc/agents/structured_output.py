@@ -136,7 +136,18 @@ class StructuredOutputAgent:
                         "code_block":True
                     }
                 )
-                await adispatch_custom_event("structured_output",{"chunk":{"type":"code","text":response_struct.model_dump()}},config=config)
+                custom_response=messages.BaseMessage(
+                    type="code",
+                    content=[{
+                        "type":"code",
+                        "text":response_struct.model_dump_json(indent=2)
+                    }], 
+                    id=str(uuid.uuid4()),
+                    additional_kwargs={
+                        "code_block":True
+                    }
+                )
+                await adispatch_custom_event("structured_output",{"chunk":custom_response},config=config)
                 break
             except Exception as e:
                 traceback.print_exc()

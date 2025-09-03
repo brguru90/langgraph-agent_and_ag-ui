@@ -1730,22 +1730,22 @@ class ResearchAgent:
                     "transport": "http",
                 }
         }
-        # self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)   
-        # max_conn_retry=20
-        # while max_conn_retry>=0 and not self.client_session :
-        #   try:
-        #       print("max_conn_retry",max_conn_retry)
-        #       self.client_session = (await self.client.__aenter__()).session
-        #       break
-        #   except Exception as e:
-        #       time.sleep(0.2)
-        #       max_conn_retry-=1
+        self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)   
+        max_conn_retry=20
+        while max_conn_retry>=0 and not self.client_session :
+          try:
+              print("max_conn_retry",max_conn_retry)
+              self.client_session = (await self.client.__aenter__()).session
+              break
+          except Exception as e:
+              time.sleep(0.2)
+              max_conn_retry-=1
         self.tools=[]
-        # self.tools.extend(await load_mcp_tools(self.client_session))   
-        # if self.tools:
-        #     print(f"Successfully loaded {len(self.tools)} MCP tools")
-        # else:
-        #     raise ValueError("No tools loaded, returning...")
+        self.tools.extend(await load_mcp_tools(self.client_session))   
+        if self.tools:
+            print(f"Successfully loaded {len(self.tools)} MCP tools")
+        else:
+            raise ValueError("No tools loaded, returning...")
         
         self.tools.append(vue3_snippet_preview_guide)
 
