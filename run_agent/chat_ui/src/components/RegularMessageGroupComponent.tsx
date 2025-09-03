@@ -15,6 +15,7 @@ export function RegularMessageGroupComponent({ messages }: RegularMessageGroupCo
     .join("");
   
   const isUserMessage = messages[0]?.message_type === "user";
+  const isCodeMessage = messages[0]?.message_type === "code";
   
   // Check if any message in the group has tool calls
   const hasToolCalls = messages.some(msg => msg.toolCalls && msg.toolCalls.length > 0);
@@ -43,11 +44,11 @@ export function RegularMessageGroupComponent({ messages }: RegularMessageGroupCo
       style={{
         alignSelf: isUserMessage ? "flex-end" : "flex-start",
         maxWidth: "80%",
-        backgroundColor: isUserMessage ? "#007acc" : "#fff",
+        backgroundColor: isUserMessage ? "#007acc" : isCodeMessage ? "#f0f0f0" : "#fff",
         color: isUserMessage ? "white" : "#333",
         padding: "12px 16px",
         borderRadius: isUserMessage ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
-        border: isUserMessage ? "none" : "1px solid #ddd",
+        border: isUserMessage ? "none" : isCodeMessage ? "1px solid #ccc" : "1px solid #ddd",
         boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
         marginBottom: "20px",
       }}
@@ -63,19 +64,18 @@ export function RegularMessageGroupComponent({ messages }: RegularMessageGroupCo
           children={combinedContent} 
           remarkPlugins={[remarkGfm]} 
           components={{
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            code({node, className, children, ...props}) {
+            code({className, children}) {
               const match = /language-(\w+)/.exec(className || '')
               return  match ? (
                 <SyntaxHighlighter
                   children={String(children).replace(/\n$/, '')}
-                  style={dark}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  style={dark as any}
                   language={match[1]}
                   PreTag="div"
-                  {...props}
                 />
               ) : (
-                <code className={className} {...props}>
+                <code className={className}>
                   {children}
                 </code>
               )

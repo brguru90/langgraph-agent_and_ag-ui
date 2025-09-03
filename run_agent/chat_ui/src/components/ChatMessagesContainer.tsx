@@ -77,6 +77,13 @@ export function ChatMessagesContainer({
                 messages={group.messages}
               />
             );
+          } else if (group.group_type === 'code') {
+            return (
+              <RegularMessageGroupComponent
+                key={group.id}
+                messages={group.messages}
+              />
+            );
           } else {
             return (
               <RegularMessageGroupComponent

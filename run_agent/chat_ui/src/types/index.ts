@@ -41,7 +41,7 @@ export interface TokenUsage {
 
 export interface ChatDisplayMessage {
   id: string | number;
-  message_type: "assistance" | "tool" | "interrupt" | "user";
+  message_type: "assistance" | "tool" | "interrupt" | "user" | "code";
   block: "start" | "end" | "content";
   content?: string;
   tokenUsage?: TokenUsage;
@@ -56,6 +56,9 @@ export interface ChatDisplayMessage {
     question: string;
     isActive: boolean;
     response?: "yes" | "no" | string;
+  };
+  codeData?: {
+    message_id: string;
   };
 }
 

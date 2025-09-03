@@ -73,7 +73,7 @@ export const getMessagesByType = (
  *
  * The grouping algorithm:
  * 1. Only processes messages with IDs greater than lastProcessedId for efficiency
- * 2. Groups messages by message_type ("assistance", "tool", "interrupt", "user")
+ * 2. Groups messages by message_type ("assistance", "tool", "interrupt", "user", "code")
  * 3. Tracks partial state - true for incomplete messages, false for complete ones
  * 4. Handles three block types:
  *    - "start": Creates new group, marks as partial
@@ -237,6 +237,49 @@ export const useAgentService = (): UseAgentService => {
                   content: customEvent.value,
                 });
                 return messages_ids.current-1;
+              case "code": {
+                const codeEvent = customEvent.value;
+                if (codeEvent.type === "code_start") {
+                  messages_ref.current.push({
+                    id: messages_ids.current++,
+                    message_type: "code",
+                    block: "start",
+                    content: "",
+                    codeData: {
+                      message_id: codeEvent.message_id,
+                    },
+                  });
+                  return messages_ids.current-1;
+                } else if (codeEvent.type === "code") {
+                  // Find the last code message with matching message_id
+                  const lastCodeMessage = messages_ref.current
+                    .slice()
+                    .reverse()
+                    .find(msg => 
+                      msg.message_type === "code" && 
+                      msg.codeData?.message_id === codeEvent.message_id
+                    );
+                  if (lastCodeMessage) {
+                    lastCodeMessage.content = codeEvent.text || "";
+                    lastCodeMessage.block = "content";
+                    return lastCodeMessage.id as number;
+                  }
+                } else if (codeEvent.type === "code_end") {
+                  // Find the last code message with matching message_id and mark as complete
+                  const lastCodeMessage = messages_ref.current
+                    .slice()
+                    .reverse()
+                    .find(msg => 
+                      msg.message_type === "code" && 
+                      msg.codeData?.message_id === codeEvent.message_id
+                    );
+                  if (lastCodeMessage) {
+                    lastCodeMessage.block = "end";          
+                    return lastCodeMessage.id as number;
+                  }
+                }
+                return -1;
+              }
             }
             break;
           }
@@ -256,7 +299,8 @@ export const useAgentService = (): UseAgentService => {
             if (
               lastMessage &&
               (lastMessage.message_type === "assistance" ||
-                lastMessage.message_type === "tool")
+                lastMessage.message_type === "tool" ||
+                lastMessage.message_type === "code")
             ) {
               lastMessage.content =
                 (lastMessage.content || "") + contentEvent.delta;
@@ -271,7 +315,8 @@ export const useAgentService = (): UseAgentService => {
             if (
               lastMessage &&
               (lastMessage.message_type === "assistance" ||
-                lastMessage.message_type === "tool")
+                lastMessage.message_type === "tool" ||
+                lastMessage.message_type === "code")
             ) {
               lastMessage.block = "end";
             }
