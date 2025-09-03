@@ -48,8 +48,8 @@ from .coding_agent import CodingAgent
 from .research_agent import ResearchAgent
 from .structured_output import StructuredOutputAgent
 from langgraph_supervisor.handoff import create_forward_message_tool
-from .state import ChatState,SupervisorNode,PlanOutputModal,CodeSnippetsStructure
-from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper,create_handoff_back_node
+from .state import ChatState,SupervisorNode,PlanOutputModal,CodeSnippetsStructure,StepModal
+from .utils import get_aws_modal,max_tokens,AsyncSqliteSaverWrapper,create_handoff_back_node,get_aws_embed_model
 from langgraph_supervisor import create_supervisor
 from langchain_core.language_models import BaseChatModel, LanguageModelLike
 from langchain_core.output_parsers import PydanticOutputParser
@@ -58,6 +58,13 @@ from langchain_core.tools import BaseTool
 # from langgraph.config import get_stream_writer
 from langchain_core.callbacks.manager import adispatch_custom_event
 import warnings
+from langmem.short_term import SummarizationNode,summarize_messages,RunningSummary
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_aws import AmazonKnowledgeBasesRetriever
+from langchain_aws.vectorstores.inmemorydb import InMemoryVectorStore
+from langchain.docstore.document import Document
+
+
 
 plan_structure_parser = PydanticOutputParser(pydantic_object=PlanOutputModal)
 code_structure_parser = PydanticOutputParser(pydantic_object=CodeSnippetsStructure)
@@ -67,7 +74,7 @@ plan_prompt="""
         Your task is to generate a plan as a list of steps, following this schema:
 
         StepModal:
-        - step_uid: Unique identifier for this step (generate a UUID or unique string)
+        - step_uid: Unique identifier for this step (generate a UUID or unique string,step_uid format should be similar to step__{{step_sequence}}_{{random_character}}__${{agent_name}}__${{tool_name}} Example: step__001_ABCD___coding_agent__FindTagNamesBySubstring)
         - agent_name: Name of the agent executing this step
         - instruction: A clear instruction describing what needs to be done in this step, and specify exactly what information is needed to avoid the unnecessary information from the agent which will overflow the context limit
         - sub_steps: List of sub-steps to be executed within this step
@@ -84,7 +91,7 @@ plan_prompt="""
         - Analyze the user query and break it down into logical, sequential steps.
         - For each step, specify which agents and set of tools to use and multiple agents are allowed to get the different information's or to get the missing or additional information from different sources.
         - Important!, after getting the information add one or more additional steps to find and filter the most relevant information for the user query if the information from multiple source acquired.
-        - create step in plan to only extract necessary information based on user query and don't fetch additional information which may not require or may not be much important and each agent can execute multiple tool calls in its lifecycle so avoid calling the agent repeatedly just to use single tool from agent instead try to batch the tool calls in same step, to avoid crossing the context limit because of response from multiple step.
+        - Important!, create step in plan to only extract necessary information based on user query and don't fetch additional information which may not require or may not be much important and each agent can execute multiple tool calls in its lifecycle so avoid calling the agent repeatedly just to use single tool from agent instead try to batch the tool calls in same step, to avoid crossing the context limit because of response from multiple step.
         - If a step depends on the output of a previous step, reference the step_uid(s) in response_from_previous_step.
         - A query generating new response which depends on some response_from_previous_step, in result it might not combine the response_from_previous_step always and its new response. So for the future step try to avoid the chaining response_from_previous_step from one step to another, instead include all the dependent response_from_previous_step for each step
          Example where B dependent on A's response_from_previous_step and C dependent on both A's and B's response_from_previous_step
@@ -97,12 +104,19 @@ plan_prompt="""
         - before combining the responses, first check whether the nature of query required the structured output if its required then first execute structured_output tools then execute the combine_responses tool.
         - While combining response to single final response, if there is a structured output then don't modify the response and keep the structured output intact.
         - use the tool calls name,descriptions, arguments as additional context to create the steps for the plan.
+        - if the user query related to software programming/coding and user asking to build or implement a code then try to look is there any way to provide code so it can be executed independently and support live preview feature if any.
 
         Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
         - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
         - if the structured output for code required try to make it as single file application or single component application
         - Don't structure the output if user only ask for documentation or code snippets or example or similar
         - If the structured response is required and there are multiple chunks of information, for example if its a code implementation and there are multiple code snippets associated with multiple files, then strictly breakdown these into multiple steps in the plan and structure them individually and after structuring all the chunks of information then add one more step to finally embed them as list into single response keep the the structures in list intact.
+
+        Performance Considerations:
+        - Be mindful of the token limits when designing your plan. Each agent's response contributes to the overall token count, so it's important to keep responses concise and focused on the user's query without unnecessary elaboration and clearly define it in instruction & sub_steps in each steps of plan before handing step of plan to agents.
+        - If a step involves multiple tool calls, consider batching them together to minimize the number of interactions and reduce overhead.
+        - Avoid calling the same agent again unless it is necessary.
+        - Monitor the token usage throughout the conversation and adjust the plan as needed to stay within the limits.
 
         Note:
         - keep in mind that maximum token limit set is around {max_tokens}, so ensure the input to process final conversation is less than the maximum token limit
@@ -155,7 +169,18 @@ class PlanExecuter:
                 "tools":[{"name":tool.name,"description":tool.description,"args":tool.args} for tool in agent_tools]
             })
 
-        plan=await self.base_llm.with_structured_output(PlanOutputModal).ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=plan_structure_parser.get_format_instructions(),code_structure=code_structure_parser.get_format_instructions(),max_tokens=max_tokens), id=str(uuid.uuid4()))])
+        plan:PlanOutputModal=await self.base_llm.with_structured_output(PlanOutputModal).ainvoke([messages.SystemMessage(content=self.system_message,id=str(uuid.uuid4()))]+state["messages"]+[messages.HumanMessage(content=plan_prompt.format(tools=json.dumps(tools,default=str),output_schema=plan_structure_parser.get_format_instructions(),code_structure=code_structure_parser.get_format_instructions(),max_tokens=max_tokens), id=str(uuid.uuid4()))])
+
+        plan_map:Dict[str,StepModal]={}
+        for step in plan.plan:
+            plan_map[step.step_uid] = step
+        for step in plan.plan:
+            for prev_resp in step.response_from_previous_step:
+                plan_map[prev_resp.step_uid].weight_of_current_response = max(plan_map[prev_resp.step_uid].weight_of_current_response or 0,prev_resp.weight)
+        for step in plan.plan:
+            if not step.weight_of_current_response:
+                step.weight_of_current_response = 100
+
 
         # writer = get_stream_writer()
         # writer({"event":"plan","data":plan.model_dump_json()})
@@ -181,12 +206,16 @@ class PlanExecuter:
 
         plans=state["plan"].plan
         for plan in plans:
+            print(f"\n---plan",plan,type(plan))
             if plan.status == "pending":
                 instructions=plan.model_dump()
                 print("\n---instructions",instructions)
-                dependent_response=[dependent_plan.response.content for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response is not None]
+                response_from_previous_step:Dict[str,float]={}
+                for resp in plan.response_from_previous_step:
+                    response_from_previous_step[resp.step_uid] = resp.weight
+                dependent_response=[(f"# with importance weight value for current following information: {response_from_previous_step[dependent_plan.step_uid]} of 100,\n\n{dependent_plan.response.content}") for dependent_plan in plans if dependent_plan.step_uid in response_from_previous_step and dependent_plan.response is not None]
                 try:
-                    dependent_response=[get_buffer_string([dependent_plan.response]) for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response]
+                    dependent_response=[(f"# with importance weight value for current following information: {response_from_previous_step[dependent_plan.step_uid]} of 100,\n\n{get_buffer_string([dependent_plan.response])}") for dependent_plan in plans if dependent_plan.step_uid in response_from_previous_step and dependent_plan.response]
                 except Exception as e:
                     print(f"Error processing dependent responses: {e}")
                 # total_input_tokens = sum(dependent_plan.response_token_size for dependent_plan in plans if dependent_plan.step_uid in plan.response_from_previous_step and dependent_plan.response_token_size is not None)
@@ -196,11 +225,16 @@ class PlanExecuter:
                 del instructions["response_from_previous_step"]
                 del instructions["response_token_size"]
                 del instructions["status"]
+
+
+                # AmazonKnowledgeBaseRetriever
+                # get_aws_embed_model().
+
                 return Command(
                     update={
                         "tool_call_count":0,
                         'messages':  [
-                            state["original_messages"][0],
+                            # state["original_messages"][0],
                             messages.HumanMessage(content=f"current query: {plan.instruction}",id=str(uuid.uuid4())),
                             messages.HumanMessage(content=f"complete instructions:\n {json.dumps(instructions,default=str)}\n\n Depend on the responses(knowledge base):\n{dependent_response}",id=str(uuid.uuid4()))
                         ]
@@ -214,24 +248,93 @@ class PlanExecuter:
             goto=SupervisorNode.END_CONV_VAL
         )
 
+    def get_relevant_context(self, query:str, response: List[messages.BaseMessage], token_limit) -> str:
+        """Extract relevant context from the chat state for the current plan."""
+        embeddings=get_aws_embed_model()
+        semantic_text_splitter=SemanticChunker(
+            embeddings,
+            breakpoint_threshold_type="percentile",
+            breakpoint_threshold_amount=75.0,
+            min_chunk_size=1000
+        )
+        semantic_chunks = semantic_text_splitter.create_documents([get_buffer_string(response)])
+
+        print("----- chunk length:", len(semantic_chunks))
+        print("----- semantic_chunks", semantic_chunks)
+
+        redis_url = "redis://localhost:6379"
+        vector_schema = {"embedding": "VECTOR"}  # schema for embedding field
+        INDEX_NAME = "temp_index"
+
+        vs = InMemoryVectorStore.from_documents(
+            semantic_chunks,
+            embeddings,
+            redis_url=redis_url,
+            vector_schema=vector_schema,
+            index_name=INDEX_NAME,
+        )
+
+        docs = vs.max_marginal_relevance_search(query, k=10000)
+
+        selected:List[str] = []
+        current_tokens = 0
+        for doc in docs:
+            # tlen = doc.metadata["token_length"]
+            tlen=count_tokens_approximately([messages.HumanMessage(content=doc.page_content,id=str(uuid.uuid4()))])
+            if current_tokens + tlen  > token_limit:
+                break
+            selected.append(doc.page_content)
+            current_tokens += tlen
+
+        return messages.HumanMessage(content=",".join([doc for doc in selected]),id=str(uuid.uuid4()))
+        
+
     def post_agent_execution(self, state: ChatState, config: RunnableConfig) ->  Command[Literal[SupervisorNode.ROUTE]]:
         plans=state["plan"].plan
+        last_plan=plans[-1]
         for plan in plans:
             if plan.status == "pending":
                 plan.status="completed"
-                plan.response=state["messages"][-1]
-                plan.response_token_size=count_tokens_approximately([plan.response]) 
+                if plan.step_uid != last_plan.step_uid:
+                    summary_max_tokens=(max_tokens*0.90)*(plan.weight_of_current_response/100)
+                    max_tokens_before_summary=summary_max_tokens*0.80
+                    result = summarize_messages(
+                        messages=state["original_messages"][:1] + state["messages"][-1:],
+                        running_summary=None,
+                        model=self.llm,
+                        max_tokens=summary_max_tokens,
+                        max_tokens_before_summary=max_tokens_before_summary,
+                        # max_summary_tokens=max_tokens*.25,
+                        token_counter=count_tokens_approximately
+                    )  
+                    for msg in result.messages:
+                        if not hasattr(msg, 'id') or msg.id is None:
+                            msg.id = str(uuid.uuid4())
+                    plan.response=result.messages[-1]
+
+                    # user_query=state["messages"][0].content
+                    # plan_instruction=plan.instruction
+                    # plan_steps=[sub_step for sub_step in plan.sub_steps]
+                    # final_query=f"""Based on the user query: {user_query}, and the plan instruction: {plan_instruction}, and the plan steps: {plan_steps}, provide a concise and relevant response that directly addresses the user's needs. Ensure that the response is clear, informative, and free of unnecessary details."""
+                    # plan.response=self.get_relevant_context(final_query,state["messages"][-1:],max_tokens*0.50)
+
+                    # plan.response=state["messages"][-1]
+                    plan.response_token_size=count_tokens_approximately([plan.response]) 
+                else:
+                    plan.response=state["messages"][-1]
+                    plan.response_token_size=count_tokens_approximately([plan.response]) 
                 break
         state["plan"].plan=plans
+       
         return Command(
             update={
-                "plans":state["plan"]
+                "plan":state["plan"]
             },
             goto=SupervisorNode.ROUTE_VAL
         )
 
     async def before_conversation_end(self, state:ChatState,config: RunnableConfig, *, store: BaseStore):
-         return Command(
+        return Command(
             update={
                 "messages": state["original_messages"] + state["messages"][-1:]
             },

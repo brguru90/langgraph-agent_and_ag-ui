@@ -95,9 +95,9 @@ async def mcp_sampling_handler(
     print(params)
     print("\n\n---------- mcp_sampling_handler -------------\n\n")
     compatible_messages=[messages.HumanMessage(content=message.content.text, id=str(uuid.uuid4())) for message in _messages]
-    if count_tokens_approximately(compatible_messages) > 1000:
-        raise ValueError(f"Messages exceed 1000 tokens({count_tokens_approximately(compatible_messages)}), unable to process.")
-    response=await get_aws_modal(model_max_tokens=1200,temperature=0.0,additional_model_request_fields=None).ainvoke(compatible_messages) # without any tool
+    # if count_tokens_approximately(compatible_messages) > 5000:
+    #     raise ValueError(f"Messages exceed 1000 tokens({count_tokens_approximately(compatible_messages)}), unable to process.")
+    response=await get_aws_modal(model_id="openai.gpt-oss-120b-1:0",model_max_tokens=1200,temperature=0.0,additional_model_request_fields=None).ainvoke(compatible_messages) # without any tool
     print("MCP response:", response)
     return response.content
 

@@ -22,7 +22,7 @@ from langchain_core.messages.utils import get_buffer_string
 import json
 from langgraph.config import get_stream_writer
 from langchain_core.callbacks.manager import adispatch_custom_event
-
+from langchain_core.tools.base import  BaseTool
 
 code_parser = PydanticOutputParser(pydantic_object=CodeSnippetsStructure)
 
@@ -68,18 +68,7 @@ def structured_output_for_code() -> CodeSnippetsStructure:
 
     """
 
-    return """
-    Provide the structured output for the code implementations,
-
-    Conditions for providing the structured response, if below conditions not met then don't structure the output and keep original response intact:
-    - only structure the output if user explicitly asks for code implementation or executable code or runnable code or or complete code or similar
-    - Don't structure the output if user only ask for documentation or code snippets or example or similar
-
-    Guidelines:
-    - Include all relevant code snippets, file names, and other contextual information.
-    - Maintain the original formatting and structure of the code as much as possible.
-    - The final code should be executable
-"""
+    return ""
 
 class StructuredOutputAgent:
 
@@ -91,14 +80,15 @@ class StructuredOutputAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
+        self.name:str=SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL
         self.descriptions="Responsible for generating structured outputs and also combining the multiple information from different execution steps but it can do only one task for the agent execution means it can call only one tool for the current agent execution, if another tool call also needed then agent should be re-invoked."
 
     def get_steering_tool(self):
-        return create_handoff_tool(agent_name=SupervisorNode.STRUCTURED_OUTPUT_AGENT_VAL, description=f"Assign task to a structured output agent ({self.descriptions}).")
+        return create_handoff_tool(agent_name=self.name, description=f"Assign task to a structured output agent ({self.descriptions}).")
     
     async def combine_responses(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
         """Combine responses node - only responsible for calling combine_responses tool"""    
-        combine_response_payload=state["messages"]
+        combine_response_payload=state["messages"][:]
         combine_response_payload.append(    
             messages.HumanMessage(
                 content=f"""Combine the responses:
@@ -108,7 +98,7 @@ class StructuredOutputAgent:
                 id=str(uuid.uuid4())
             )
         )
-        response=await self.base_llm.ainvoke(combine_response_payload)
+        response=await self.base_llm.ainvoke(get_buffer_string(combine_response_payload))
         
         return Command(
             update={
@@ -119,13 +109,13 @@ class StructuredOutputAgent:
     
     async def structured_output_for_code(self, state: ChatState, config: RunnableConfig, *, store: BaseStore):
         """Structured output for code node - only responsible for calling structured_output_for_code tool"""    
-        structure_code_payload=state["messages"]
+        structure_code_payload=state["messages"][:]
         structure_code_payload.append(    
             messages.HumanMessage(
                 content=f"""
                 * provide structured output for the code implementations for the plan
-                * if the multiple unidentified code snippet present then try to relate each other before providing the structured output
-                * for the descriptions don't create README.md instead provide it as part of structured output which have fields for descriptions
+                * if the multiple unidentified code snippet present then try to relate each other before providing the structured output and if any data like file_name,language,framework,descriptions etc then try to identify or guess them
+                * for the descriptions don't create README.md as a part of /file instead provide it as part of structured output which have fields for descriptions
                 * Output Schema(Output response should be STRICTLY needed in the format): {code_parser.get_format_instructions()}
                 """,
                 id=str(uuid.uuid4())
@@ -138,7 +128,7 @@ class StructuredOutputAgent:
         max_retry=3
         while max_retry > 0:
             try:
-                response_struct:CodeSnippetsStructure=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(structure_code_payload) # include_raw will cause error since it will return tool message without tool call and this can't be used in other agent where this tools in not bind to llm
+                response_struct:CodeSnippetsStructure=await self.base_llm.with_structured_output(CodeSnippetsStructure).ainvoke(get_buffer_string(structure_code_payload)) # include_raw will cause error since it will return tool message without tool call and this can't be used in other agent where this tools in not bind to llm
                 response=messages.HumanMessage(
                     content=response_struct.model_dump_json(indent=2), 
                     id=str(uuid.uuid4()),
@@ -146,6 +136,7 @@ class StructuredOutputAgent:
                         "code_block":True
                     }
                 )
+                await adispatch_custom_event("structured_output",{"chunk":{"type":"code","text":response_struct.model_dump()}},config=config)
                 break
             except Exception as e:
                 traceback.print_exc()
@@ -153,12 +144,14 @@ class StructuredOutputAgent:
                 with open('plans.json', 'w') as f:
                     json.dump(structure_code_payload, f, default=str, indent=2)
                 # import pdb; pdb.set_trace()
+                structure_code_payload=await self.base_llm.ainvoke(get_buffer_string(structure_code_payload))
+              
             max_retry -= 1
 
         # writer = get_stream_writer()
         # writer({"event":"structured_output","type":"code","data":response_struct.model_dump_json()})
 
-        await adispatch_custom_event("structured_output",{"chunk":{"type":"code","text":response_struct.model_dump()}},config=config)
+        
 
         return Command(
             update={
@@ -216,14 +209,17 @@ class StructuredOutputAgent:
             print("\n----- check_call_to_agent ------\n")
             delegate_to_node=["combine_responses","structured_output_for_code"]
             if not isinstance(last_message,messages.AIMessage):
+                print("\n------check_call_to_agent return due to not AIMessage------\n")
                 return False
-            is_agent_call = last_message.tool_calls[0]['name'] in delegate_to_node
+            agent_node_name=last_message.tool_calls[0]['name'].replace(self.name+"_","")
+            is_agent_call = agent_node_name in delegate_to_node
             if not is_agent_call:
+                print(f"\n------check_call_to_agent return due to not is_agent_call({agent_node_name}) ------\n")
                 return False
             
             tool_message = messages.ToolMessage(
-                content=f"Successfully transferred to Agent `{last_message.tool_calls[0]["name"]}`",
-                name=last_message.tool_calls[0]['name'],
+                content=f"Successfully transferred to Agent `{agent_node_name}`",
+                name=agent_node_name,
                 tool_call_id=last_message.tool_calls[0]["id"]
             )
 
@@ -232,7 +228,7 @@ class StructuredOutputAgent:
                 update={
                     'messages':  state['messages'] + [tool_message]
                 },
-                goto=last_message.tool_calls[0]['name']
+                goto=agent_node_name
             )  
 
         # Normal flow routing logic:
@@ -261,11 +257,14 @@ class StructuredOutputAgent:
         
         # Initialize LLMs
         config = Config(read_timeout=3600, connect_timeout=60)
-        self.base_llm = get_aws_modal(config=config,model_max_tokens=None,additional_model_request_fields=None, temperature=0)
+        self.base_llm = get_aws_modal(config=config,additional_model_request_fields=None, temperature=0)
 
-        self.tools = []
+        self.tools:List[BaseTool] = []
         self.tools.append(combine_responses) 
-        self.tools.append(structured_output_for_code)       
+        self.tools.append(structured_output_for_code)     
+
+        for tool in self.tools:
+            tool.name=self.name+"_"+tool.name  
         self.llm = self.base_llm.bind_tools(self.tools)
         self.tool_node = ToolNode(self.tools)
 
@@ -282,7 +281,7 @@ class StructuredOutputAgent:
         builder.add_edge("structured_output_for_code", "route")
         builder.add_edge("route", END)
 
-        self.graph = builder.compile(name=SupervisorNode.STRUCTURED_OUTPUT_AGENT)
+        self.graph = builder.compile(name=self.name)
         self.graph.get_graph().print_ascii()
 
     async def close(self):

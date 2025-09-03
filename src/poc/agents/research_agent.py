@@ -14,7 +14,8 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from .state import ChatState,SupervisorNode
 from langchain_core.tools import tool
 import traceback
-
+import time
+from botocore.config import Config
 
 
 @tool(description="Provide the Guide or steps to run the executable vue3 SFC code as a preview")
@@ -1640,10 +1641,11 @@ class ResearchAgent:
         self.graph = None
         self.client:Client = None
         self.client_session:ClientSession = None
-        self.descriptions="provide the generic documentations related to software coding"
+        self.name:str=SupervisorNode.RESEARCH_AGENT_VAL
+        self.descriptions="provide the generic documentations related to software coding, Note: the tools in this agent returns huge information so decide tool call based on token limits."
 
     def get_steering_tool(self):
-        return create_handoff_tool(agent_name=SupervisorNode.RESEARCH_AGENT_VAL, description=f"Assign task to a researcher agent ({self.descriptions}).")
+        return create_handoff_tool(agent_name=self.name, description=f"Assign task to a researcher agent ({self.descriptions}).")
 
     async def llm_node(self, state: ChatState, config: RunnableConfig, *, store: BaseStore) -> Command[Literal["route"]]:
         """LLM node - only responsible for calling llm.invoke"""
@@ -1718,7 +1720,9 @@ class ResearchAgent:
         """Initialize the agent with MCP tools and LLM"""
         
         # Initialize LLMs
-        self.base_llm = get_aws_modal()
+        botocore_cfg = Config(connect_timeout=30, read_timeout=60, retries={'max_attempts': 0})
+
+        self.base_llm = get_aws_modal(config=botocore_cfg)
 
         mcp_config={
                 "context7": {
@@ -1726,16 +1730,27 @@ class ResearchAgent:
                     "transport": "http",
                 }
         }
-        self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)   
-        self.client_session = (await self.client.__aenter__()).session
-        self.tools = await load_mcp_tools(self.client_session)        
-        if self.tools:
-            print(f"Successfully loaded {len(self.tools)} MCP tools")
-        else:
-            raise ValueError("No tools loaded, returning...")
+        # self.client=Client(mcp_config,sampling_handler=mcp_sampling_handler)   
+        # max_conn_retry=20
+        # while max_conn_retry>=0 and not self.client_session :
+        #   try:
+        #       print("max_conn_retry",max_conn_retry)
+        #       self.client_session = (await self.client.__aenter__()).session
+        #       break
+        #   except Exception as e:
+        #       time.sleep(0.2)
+        #       max_conn_retry-=1
+        self.tools=[]
+        # self.tools.extend(await load_mcp_tools(self.client_session))   
+        # if self.tools:
+        #     print(f"Successfully loaded {len(self.tools)} MCP tools")
+        # else:
+        #     raise ValueError("No tools loaded, returning...")
         
         self.tools.append(vue3_snippet_preview_guide)
 
+        for tool in self.tools:
+            tool.name=self.name+"_"+tool.name
         # Bind tools to LLM and create tool node
         self.llm = self.base_llm.bind_tools(self.tools)
         self.tool_node = ToolNode(self.tools)
@@ -1749,7 +1764,7 @@ class ResearchAgent:
         builder.add_edge(START, 'llm')
         builder.add_edge("route", END)
 
-        self.graph = builder.compile(name=SupervisorNode.RESEARCH_AGENT_VAL)
+        self.graph = builder.compile(name=self.name)
         self.graph.get_graph().print_ascii()
 
     async def close(self):

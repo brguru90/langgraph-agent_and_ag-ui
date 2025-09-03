@@ -60,10 +60,11 @@ class CodingAgent:
         self.max_tool_calls = 20
         self.client:Client = None
         self.client_session:ClientSession = None
+        self.name:str=SupervisorNode.CODING_AGENT_VAL
         self.descriptions="Provides documentation for the vue3 with the FDS(Fabric Design system) components"
 
     def get_steering_tool(self):
-        return create_handoff_tool(agent_name=SupervisorNode.CODING_AGENT_VAL, description=f"Assign task to a coding/programming Agent ({self.descriptions}")
+        return create_handoff_tool(agent_name=self.name, description=f"Assign task to a coding/programming Agent ({self.descriptions}")
     
     
 
@@ -200,6 +201,8 @@ class CodingAgent:
         else:
             raise ValueError("No tools loaded, returning...")
 
+        for tool in self.tools:
+            tool.name=self.name+"_"+tool.name
         self.llm = self.base_llm.bind_tools(self.tools)            
         self.tool_node = ToolNode(self.tools)
 
@@ -211,7 +214,7 @@ class CodingAgent:
         builder.add_edge(START, 'llm')
         builder.add_edge("route", END)
 
-        self.graph = builder.compile(name=SupervisorNode.CODING_AGENT_VAL)
+        self.graph = builder.compile(name=self.name)
         self.graph.get_graph().print_ascii()
         
 
