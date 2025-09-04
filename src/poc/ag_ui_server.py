@@ -158,7 +158,7 @@ async def handle_agent_events(request: Request, my_agent: MyAgent, payload: Chat
         print(f"Error in handle_agent_events: {e}", e)
         traceback.print_exc()
         traceback.print_stack()
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
 
     with open("all_events.pkl", "wb") as file:
         temp_file = tempfile.TemporaryFile()
