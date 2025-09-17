@@ -1,0 +1,119 @@
+values:
+  plan:
+    plan:
+      - step_uid: step__001_ABCD__coding_agent__StartupInstructions
+        agent_name: coding_agent
+        instruction: Initialize the Fabric Design System documentation server and get startup instructions. Then find button components by searching for 'button' substring in component tag names and list all available button variants.
+        sub_steps:
+          - Call StartupInstructions to initialize FDS documentation server
+          - Use FindTagNamesBySubstring with 'button' to find button-related components
+          - For each button component found, use ListVariantsByTagName to get all available variants
+        available_tools:
+          - coding_agent_StartupInstructions
+          - coding_agent_FindTagNamesBySubstring
+          - coding_agent_ListVariantsByTagName
+        response_from_previous_step: []
+        response:
+          content: ""
+          additional_kwargs: {}
+          response_metadata: {}
+          type: ai
+          name: null
+          id: null
+        response_token_size: null
+        weight_of_current_response: 100
+        status: pending
+      - step_uid: step__002_EFGH__coding_agent__GetButtonDocumentation
+        agent_name: coding_agent
+        instruction: Get detailed documentation and usage examples for the most relevant button component variants found in the previous step. Focus on simple/basic button variants that would be suitable for a showcase page.
+        sub_steps:
+          - Use GetDocumentationByVariantTitle for the most basic/simple button variant
+          - Get documentation for at least 2-3 different button variants (e.g., primary, secondary, disabled states)
+          - Ensure the documentation includes Vue 3 usage examples and component properties
+        available_tools:
+          - coding_agent_GetDocumentationByVariantTitle
+        response_from_previous_step:
+          - step_uid: step__001_ABCD__coding_agent__StartupInstructions
+            weight: 100
+            max_weight: 100
+        response:
+          content: ""
+          additional_kwargs: {}
+          response_metadata: {}
+          type: ai
+          name: null
+          id: null
+        response_token_size: null
+        weight_of_current_response: 40
+        status: pending
+      - step_uid: step__003_IJKL__coding_agent__GetCSSStyles
+        agent_name: coding_agent
+        instruction: Get CSS style categories and retrieve relevant CSS styles for button components and general styling that would be needed for a Vue 3 showcase page.
+        sub_steps:
+          - Use listCssStyleCategories to get all available CSS categories
+          - Use getCssStylesByCategory for button-related CSS categories
+          - Get CSS styles for layout, typography, and color categories that would be useful for the showcase page
+        available_tools:
+          - coding_agent_listCssStyleCategories
+          - coding_agent_getCssStylesByCategory
+        response_from_previous_step: []
+        response:
+          content: ""
+          additional_kwargs: {}
+          response_metadata: {}
+          type: ai
+          name: null
+          id: null
+        response_token_size: null
+        weight_of_current_response: 30
+        status: pending
+      - step_uid: step__004_MNOP__research_agent__Vue3Guidelines
+        agent_name: research_agent
+        instruction: Get Vue 3 design guidelines and best practices for creating component showcase pages, including information about Single File Components (SFC) structure and preview capabilities.
+        sub_steps:
+          - Get Vue 3 SFC preview guide and execution steps
+          - Focus on Vue 3 design patterns and best practices for showcase pages
+          - Include information about component composition and reactive patterns
+        available_tools:
+          - research_agent_vue3_snippet_preview_guide
+        response_from_previous_step: []
+        response:
+          content: ""
+          additional_kwargs: {}
+          response_metadata: {}
+          type: ai
+          name: null
+          id: null
+        response_token_size: null
+        weight_of_current_response: 30
+        status: pending
+      - step_uid: step__005_QRST__structured_output_agent__StructureCode
+        agent_name: structured_output_agent
+        instruction: Create a structured output for the Vue 3 button showcase page implementation using all the information gathered from previous steps. The output should be a complete, executable Vue 3 Single File Component.
+        sub_steps:
+          - Combine button component documentation, CSS styles, and Vue 3 guidelines
+          - Create a complete Vue 3 SFC that showcases Fabric Design System button components
+          - Include proper imports, component structure, styling, and multiple button variants
+          - Ensure the code is executable and follows Vue 3 best practices
+        available_tools:
+          - structured_output_agent_structured_output_for_code
+        response_from_previous_step:
+          - step_uid: step__002_EFGH__coding_agent__GetButtonDocumentation
+            weight: 40
+            max_weight: 100
+          - step_uid: step__003_IJKL__coding_agent__GetCSSStyles
+            weight: 30
+            max_weight: 100
+          - step_uid: step__004_MNOP__research_agent__Vue3Guidelines
+            weight: 30
+            max_weight: 100
+        response:
+          content: ""
+          additional_kwargs: {}
+          response_metadata: {}
+          type: ai
+          name: null
+          id: null
+        response_token_size: null
+        weight_of_current_response: 100
+        status: pending

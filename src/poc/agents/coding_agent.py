@@ -57,7 +57,7 @@ class CodingAgent:
         self.tools = None
         self.tool_node = None
         self.graph = None
-        self.max_tool_calls = 20
+        self.max_tool_calls = 4
         self.client:Client = None
         self.client_session:ClientSession = None
         self.name:str=SupervisorNode.CODING_AGENT_VAL
